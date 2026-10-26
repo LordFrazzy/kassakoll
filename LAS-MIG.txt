@@ -1,0 +1,74 @@
+KASSAKOLL
+=========
+
+Kör på datorn: dubbelklicka starta.bat (öppnar http://localhost:8000).
+
+
+LÄGG UPP SIDAN PÅ INTERNET (GitHub Pages, gratis)
+-------------------------------------------------
+1. Skapa ett konto på github.com (om du inte har ett).
+2. Klicka på "+" uppe till höger > "New repository".
+   - Repository name: kassakoll
+   - Välj "Public" (krävs för gratis GitHub Pages)
+   - Klicka "Create repository".
+3. På sidan som visas: klicka på länken "uploading an existing file".
+   Dra in ALLA filer från mappen Kassakoll (inte själva mappen):
+   index.html, app.js, db.js, parse.js, styles.css, config.js, supabase.sql, LAS-MIG.txt m.fl.
+   Klicka "Commit changes".
+4. Gå till Settings > Pages (i menyn till vänster).
+   Under "Branch": välj "main" och "/ (root)", klicka "Save".
+5. Efter någon minut finns sidan på:
+   https://DITT-ANVÄNDARNAMN.github.io/kassakoll/
+   (adressen visas också överst på Pages-sidan).
+
+Ändrar du något senare: ladda upp den ändrade filen på samma sätt ("Add file" > "Upload files").
+
+
+INLOGGNING OCH SYNK MELLAN MOBIL OCH DATOR (Supabase, gratis)
+-------------------------------------------------------------
+Gör GitHub-stegen först, så att du har adressen till sidan.
+
+1. Skapa ett konto på supabase.com och klicka "New project".
+   - Name: kassakoll
+   - Database password: hitta på ett och spara det någonstans
+   - Region: välj en i Europa, t.ex. Stockholm (eu-north-1)
+   Vänta tills projektet är klart (ett par minuter).
+
+2. Skapa databasen:
+   Öppna "SQL Editor" i menyn till vänster > "New query".
+   Öppna filen supabase.sql, kopiera ALLT och klistra in. Klicka "Run".
+   Det ska stå "Success. No rows returned".
+
+3. Berätta för Supabase var sidan ligger (för bekräftelsemejl och glömt lösenord):
+   Authentication > URL Configuration
+   - Site URL: https://DITT-ANVÄNDARNAMN.github.io/kassakoll/
+   - Redirect URLs: lägg till samma adress, och även http://localhost:8000/
+
+4. Hämta de två koderna:
+   Project Settings (kugghjulet) > API / Data API och API Keys
+   - Project URL (ser ut som https://abcdefgh.supabase.co)
+   - "anon" "public"-nyckeln (lång text som börjar med eyJ...).
+     Finns den under fliken "Legacy API keys", ta den därifrån.
+     Annars går "publishable"-nyckeln (börjar med sb_publishable_).
+   ALDRIG "service_role" eller "secret" – den nyckeln ska aldrig ligga på sidan.
+
+5. Öppna config.js och klistra in dem mellan fnuttarna:
+     supabaseUrl: 'https://abcdefgh.supabase.co',
+     supabaseAnonKey: 'eyJ...'
+   (Eller skicka dem till Claude så gör den det.)
+   Ladda upp den ändrade config.js till GitHub igen.
+
+6. Öppna sidan, välj "Inget konto? Skapa ett", bekräfta mejlet – klart.
+   Första gången du loggar in på en enhet som redan har data flyttas den till ditt konto automatiskt.
+
+
+BRA ATT VETA
+------------
+- Med inloggning sparas allt i ditt Supabase-konto och syns på alla enheter där du loggar in.
+  Det kräver internet.
+- Utan inloggning (config.js tom) sparas allt bara i webbläsaren på den enhet du använder,
+  och rensar du webbläsarens data försvinner det.
+- Kvittoläsningen (OCR) laddas från internet första gången du scannar.
+  Den läser inte alltid rätt, så titta alltid på beloppet innan du sparar.
+- Gratisprojekt i Supabase pausas om de inte används på en vecka. Logga in på supabase.com
+  och klicka "Restore" i så fall.
