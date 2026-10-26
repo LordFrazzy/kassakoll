@@ -301,6 +301,10 @@
           </div>
           <label class="field"><span>Konto</span><select id="r-cat" required></select></label>
           <label class="field"><span>Anteckning</span><input id="r-note" type="text" placeholder="Valfritt"></label>
+          <details class="ocr-details" id="ocr-details" hidden>
+            <summary>Visa texten som lästes</summary>
+            <pre id="ocr-text"></pre>
+          </details>
           <div class="attach">
             <label class="btn btn-ghost" for="r-image" id="r-image-label">Bifoga bild (t.ex. orderbekräftelse)</label>
             <input id="r-image" class="sr" type="file" accept="image/*">

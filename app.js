@@ -983,6 +983,95 @@
     return tesseractPromise;
   }
 
+  // En textläsare som återanvänds mellan scanningar (språkfilen laddas bara en gång)
+  var ocrWorker = null;
+  var ocrProgress = null;
+  async function getWorker() {
+    if (ocrWorker) return ocrWorker;
+    var T = await loadTesseract();
+    ocrWorker = T.createWorker('swe', 1, {
+      logger: function (m) { if (ocrProgress && m.status === 'recognizing text') ocrProgress(m.progress); }
+    }).catch(function (e) { ocrWorker = null; throw e; });
+    return ocrWorker;
+  }
+
+  // Gör fotot lättläst för OCR: rätt storlek, gråskala, kontrast och skuggor bort.
+  // Returnerar en svartvit version där texten är svart på vitt.
+  async function prepareForOcr(file) {
+    var bmp = await createImageBitmap(file);
+    // Kvitton är smala: skala efter bredden så att texten blir lagom stor (ca 1600 px bred)
+    var scale = Math.min(2.5, Math.max(0.4, 1600 / bmp.width));
+    if (bmp.width * bmp.height * scale * scale > 9e6) scale = Math.sqrt(9e6 / (bmp.width * bmp.height));
+    var w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+    var img = ctx.getImageData(0, 0, w, h);
+    var px = img.data;
+    var n = w * h;
+    var gray = new Uint8ClampedArray(n);
+    var hist = new Uint32Array(256);
+    for (var i = 0; i < n; i++) {
+      var g = (px[i * 4] * 299 + px[i * 4 + 1] * 587 + px[i * 4 + 2] * 114) / 1000 | 0;
+      gray[i] = g;
+      hist[g]++;
+    }
+    // Sträck ut kontrasten mellan 1:a och 99:e percentilen
+    var lo = 0, hi = 255, acc = 0;
+    while (lo < 255 && (acc += hist[lo]) < n * 0.01) lo++;
+    acc = 0;
+    while (hi > 0 && (acc += hist[hi]) < n * 0.01) hi--;
+    var range = Math.max(1, hi - lo);
+    for (i = 0; i < n; i++) gray[i] = (gray[i] - lo) * 255 / range;
+
+    // Adaptiv tröskel (Bradley): jämför varje pixel med medelvärdet runt den, så att skuggor inte gör texten svart
+    var integral = new Float64Array((w + 1) * (h + 1));
+    for (var y = 0; y < h; y++) {
+      var row = 0;
+      for (var x = 0; x < w; x++) {
+        row += gray[y * w + x];
+        integral[(y + 1) * (w + 1) + x + 1] = integral[y * (w + 1) + x + 1] + row;
+      }
+    }
+    var r = Math.max(8, Math.round(w / 32));
+    var binary = new Uint8ClampedArray(n);
+    for (y = 0; y < h; y++) {
+      var y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      for (x = 0; x < w; x++) {
+        var x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+        var sum = integral[y1 * (w + 1) + x1] - integral[y0 * (w + 1) + x1] - integral[y1 * (w + 1) + x0] + integral[y0 * (w + 1) + x0];
+        var mean = sum / ((x1 - x0) * (y1 - y0));
+        var v = gray[y * w + x];
+        // Svart bara om pixeln är tydligt mörkare än omgivningen; jämna ytor (bord, brus) blir vita
+        binary[y * w + x] = v < mean * 0.85 && mean - v > 28 ? 0 : 255;
+      }
+    }
+
+    function toCanvas(values) {
+      var out = document.createElement('canvas');
+      out.width = w; out.height = h;
+      var octx = out.getContext('2d');
+      var od = octx.createImageData(w, h);
+      for (var k = 0; k < n; k++) {
+        od.data[k * 4] = od.data[k * 4 + 1] = od.data[k * 4 + 2] = values[k];
+        od.data[k * 4 + 3] = 255;
+      }
+      octx.putImageData(od, 0, 0);
+      return out;
+    }
+    return { binary: toCanvas(binary) };
+  }
+
+  // Läser en bild med ett visst sidläge (6 = ett textblock: får med beloppen i högerkanten, 4 = en spalt)
+  async function ocr(image, psm) {
+    var worker = await getWorker();
+    await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '1' });
+    var res = await worker.recognize(image);
+    return res.data.text;
+  }
+
   function setStatus(msg, warn) {
     var el = $('scan-status');
     el.textContent = msg;
@@ -1025,16 +1114,29 @@
     setPreview(blob);
     setStatus('Läser kvittot…');
     try {
-      var T = await loadTesseract();
-      var res = await T.recognize(blob, 'swe', {
-        logger: function (m) {
-          if (token === state.scanToken && m.status === 'recognizing text') {
-            setStatus('Läser kvittot… ' + Math.round(m.progress * 100) + ' %');
-          }
-        }
-      });
+      var label = 'Läser kvittot…';
+      ocrProgress = function (p) {
+        if (token === state.scanToken) setStatus(label + ' ' + Math.round(p * 100) + ' %');
+      };
+      // Originalfotot används (inte den förminskade bilden som sparas), så att texten blir skarp
+      var prepared = await prepareForOcr(file);
       if (token !== state.scanToken) return;
-      var p = KvittoParse.parseReceipt(res.data.text);
+      var text = await ocr(prepared.binary, '6');
+      var p = KvittoParse.parseReceipt(text);
+      if (token !== state.scanToken) return;
+      // Saknas något, eller är summan en gissning: läs igen med ett annat sidläge och fyll i
+      if (p.amount == null || !p.amountSure || !p.date || !p.store) {
+        label = 'Läser en gång till…';
+        var text2 = await ocr(prepared.binary, '4');
+        text += '\n\n--- andra läsningen ---\n' + text2;
+        var p2 = KvittoParse.parseReceipt(text2);
+        if (token !== state.scanToken) return;
+        if (p2.amount != null && (p.amount == null || (p2.amountSure && !p.amountSure))) { p.amount = p2.amount; p.amountSure = p2.amountSure; }
+        ['store', 'date', 'category'].forEach(function (k) { if (!p[k]) p[k] = p2[k]; });
+      }
+      ocrProgress = null;
+      $('ocr-text').textContent = text.trim();
+      $('ocr-details').hidden = false;
       if (!$('r-store').value && p.store) $('r-store').value = p.store;
       if (p.date) $('r-date').value = p.date;
       if (!$('r-amount').value && p.amount != null) $('r-amount').value = p.amount.toFixed(2);
@@ -1048,6 +1150,7 @@
         ? 'Klart. Kontrollera uppgifterna innan du sparar.'
         : 'Allt gick inte att läsa av. Fyll i det som saknas.', found < 3);
     } catch (e) {
+      ocrProgress = null;
       if (token === state.scanToken) setStatus('Kunde inte läsa texten på kvittot. Fyll i uppgifterna själv.', true);
     }
   }
@@ -1067,6 +1170,8 @@
     hint.hidden = !(manual && !receipt);
     $('r-store').placeholder = noReceipt ? 't.ex. Zalando, Spotify, Swish till Kim' : '';
     $('r-image').value = '';
+    $('ocr-details').hidden = true;
+    $('ocr-details').open = false;
     $('r-store').value = receipt ? receipt.store : '';
     $('r-date').value = receipt ? receipt.date : todayIso();
     $('r-amount').value = receipt ? receipt.amount : '';
