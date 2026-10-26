@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kassakoll</title>
+  <meta name="description" content="Planera din budget och scanna kvitton.">
+  <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231f5c46'/%3E%3Cpath d='M9 8h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z' fill='%23f4f1ea'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Inloggning (visas bara när Supabase är inställt i config.js) -->
+  <div class="auth" id="auth" hidden>
+    <form class="auth-card" id="auth-form" autocomplete="on" novalidate>
+      <div class="brand auth-brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9"/><path d="M9 8h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/></svg>
+        <span>Kassakoll</span>
+      </div>
+      <h1 class="h2" id="auth-title">Logga in</h1>
+      <p class="hint" id="auth-lead">Din budget, dina kvitton och ditt saldo, på alla dina enheter.</p>
+      <label class="field" id="auth-email-field"><span>E-post</span><input id="auth-email" type="email" autocomplete="email" inputmode="email" required></label>
+      <label class="field" id="auth-pass-field"><span id="auth-pass-label">Lösenord</span><input id="auth-pass" type="password" autocomplete="current-password" minlength="6" required></label>
+      <p class="auth-msg" id="auth-msg" role="status" hidden></p>
+      <button class="btn btn-primary btn-lg" type="submit" id="auth-submit">Logga in</button>
+      <div class="auth-links">
+        <button class="link-btn" type="button" id="auth-switch">Inget konto? Skapa ett</button>
+        <button class="link-btn" type="button" id="auth-forgot">Glömt lösenord?</button>
+      </div>
+    </form>
+  </div>
+
+  <header class="top">
+    <div class="wrap top-in">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9"/><path d="M9 8h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/></svg>
+        <span>Kassakoll</span>
+      </div>
+      <nav class="tabs" aria-label="Sidor">
+        <button class="tab" id="tab-budget" data-view="budget" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg>
+          <span>Budget</span>
+        </button>
+        <button class="tab" id="tab-spent" data-view="spent">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V10M10 19V5M16 19v-7M22 19H2"/></svg>
+          <span>Spenderat</span>
+        </button>
+        <button class="tab" id="tab-receipts" data-view="receipts">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/></svg>
+          <span>Kvitton</span>
+        </button>
+        <button class="tab" id="tab-balance" data-view="balance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l5-5 4 4 8-9M15 7h5v5"/></svg>
+          <span>Saldo</span>
+        </button>
+      </nav>
+      <button class="icon-btn logout" type="button" id="logout" hidden aria-label="Logga ut" title="Logga ut">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div id="banner" class="banner" role="alert" hidden></div>
+
+    <div class="monthbar" id="monthbar">
+      <button class="icon-btn" id="prev-month" aria-label="Föregående månad">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 id="month-label" class="month-label">Oktober 2026</h1>
+      <button class="icon-btn" id="next-month" aria-label="Nästa månad">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+
+    <!-- Budget: planera månaden -->
+    <main id="view-budget" class="view">
+      <div class="grid-two">
+        <section class="panel plan-sum" aria-labelledby="plan-h">
+          <h2 id="plan-h" class="eyebrow-dark">Månadens plan</h2>
+          <dl class="plan-stats">
+            <div><dt>Inkomster</dt><dd class="count" id="plan-income">0 kr</dd></div>
+            <div><dt>Budgeterat</dt><dd class="count" id="plan-planned">0 kr</dd></div>
+            <div><dt>Till buffert</dt><dd class="count" id="plan-buffer">0 kr</dd></div>
+          </dl>
+          <div class="plan-bar" id="plan-bar" role="img" aria-label="Hur inkomsterna är fördelade på konton"></div>
+          <p class="hint" id="plan-hint"></p>
+          <p class="hint" id="inherit-note" hidden></p>
+        </section>
+
+        <section class="panel" aria-labelledby="inc-h">
+          <div class="panel-head">
+            <h2 id="inc-h" class="h2">Inkomster</h2>
+          </div>
+          <ul class="rows" id="income-list"></ul>
+          <form class="inline-form" id="income-form" autocomplete="off">
+            <label class="sr" for="inc-name">Namn</label>
+            <input id="inc-name" type="text" placeholder="t.ex. Lön, CSN" required>
+            <label class="sr" for="inc-amount">Belopp i kronor</label>
+            <input id="inc-amount" type="number" inputmode="decimal" min="0" step="any" placeholder="Belopp" required>
+            <button class="btn btn-primary" type="submit">Lägg till</button>
+          </form>
+        </section>
+      </div>
+
+      <section aria-labelledby="cat-h">
+        <div class="section-head">
+          <div class="section-title">
+            <h2 id="cat-h" class="h2">Konton</h2>
+            <button class="link-btn" type="button" id="manage-btn" aria-pressed="false">Hantera konton</button>
+          </div>
+          <p class="hint">Sätt en maxsumma per konto. Varje kvitto tas från sitt konto. När kontot är slut tas resten från kontot du valt under "Om slut, ta från" (Buffert som standard).</p>
+        </div>
+        <div id="cat-list" class="cats"></div>
+      </section>
+
+      <button class="btn btn-lg next-step" type="button" id="go-spent">
+        Se hur det går
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </main>
+
+    <!-- Spenderat: hur det gick mot budgeten -->
+    <main id="view-spent" class="view" hidden>
+      <section class="hero" aria-labelledby="hero-h">
+        <div class="hero-main">
+          <h2 id="hero-h" class="eyebrow">Kvar att spendera</h2>
+          <p class="hero-amount count" id="hero-left">0 kr</p>
+          <p class="hero-sub" id="hero-sub"></p>
+        </div>
+        <div class="spend-bar" id="spend-bar" role="img" aria-label="Fördelning av spenderat"></div>
+        <ul class="legend" id="spend-legend"></ul>
+        <dl class="stats">
+          <div class="stat"><dt>Inkomster</dt><dd class="count" id="stat-income">0 kr</dd></div>
+          <div class="stat"><dt>Budgeterat</dt><dd class="count" id="stat-planned">0 kr</dd></div>
+          <div class="stat"><dt>Spenderat</dt><dd class="count" id="stat-spent">0 kr</dd></div>
+        </dl>
+      </section>
+
+      <ul class="insights" id="insights" aria-label="Insikter om månaden" hidden></ul>
+
+      <section aria-labelledby="spent-h">
+        <div class="section-head">
+          <h2 id="spent-h" class="h2">Budget mot utfall</h2>
+          <p class="hint" id="spent-hint">Så mycket som har gått från varje konto. Ändra budgeten under fliken Budget.</p>
+        </div>
+        <div id="spent-list" class="cats"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="recent-h">
+        <div class="panel-head">
+          <h2 id="recent-h" class="h2">Senaste köp</h2>
+          <div class="head-actions">
+            <button class="link-btn" type="button" id="spent-manual">+ Köp utan kvitto</button>
+            <button class="link-btn" type="button" id="see-all">Visa alla</button>
+          </div>
+        </div>
+        <ul class="recent" id="recent-list"></ul>
+      </section>
+    </main>
+
+    <!-- Saldo: pengarna på kontot över tid, räknat från loggade inkomster och köp -->
+    <main id="view-balance" class="view balance-view" hidden>
+      <section class="panel bal-card" id="bal-card" aria-labelledby="bal-h">
+        <div class="bal-top">
+          <div>
+            <h2 id="bal-h" class="eyebrow-dark">Saldo på kontot</h2>
+            <p class="bal-amount count" id="bal-amount">0 kr</p>
+            <p class="bal-change" id="bal-change"></p>
+          </div>
+          <div class="seg" role="group" aria-label="Period" id="bal-periods">
+            <button type="button" data-period="7">1V</button>
+            <button type="button" data-period="30" aria-pressed="true">1M</button>
+            <button type="button" data-period="91">3M</button>
+            <button type="button" data-period="365">1Å</button>
+            <button type="button" data-period="all">Allt</button>
+          </div>
+        </div>
+        <div class="chart" id="bal-chart"></div>
+        <p class="hint" id="bal-empty" hidden></p>
+      </section>
+
+      <section aria-labelledby="goals-h">
+        <div class="section-head">
+          <h2 id="goals-h" class="h2">Mål</h2>
+          <p class="hint">"Nå saldo" jämförs med hela saldot. "Spara till" räknar hur mycket saldot har ökat sedan du skapade målet.</p>
+        </div>
+        <div class="cats goals" id="goal-list"></div>
+      </section>
+
+      <div class="grid-two">
+        <section class="panel" aria-labelledby="bal-set-h">
+          <h2 id="bal-set-h" class="h2">Uppdatera saldo</h2>
+          <p class="hint">Skriv in hur mycket du har på kontot just nu. Sedan räknas saldot fram från dina inkomster och köp. Stämmer det inte längre, till exempel för att något inte loggats, skriver du bara in det nya saldot här.</p>
+          <form class="inline-form bal-form" id="bal-form" autocomplete="off">
+            <label class="sr" for="bal-input">Saldo just nu i kronor</label>
+            <input id="bal-input" type="number" inputmode="decimal" step="any" placeholder="Saldo just nu" required>
+            <button class="btn btn-primary" type="submit">Spara saldo</button>
+          </form>
+          <label class="payday">
+            <span>Inkomsterna från Budget kommer in den</span>
+            <select id="bal-payday"></select>
+            <span>varje månad</span>
+          </label>
+        </section>
+
+        <section class="panel" aria-labelledby="bal-ev-h">
+          <h2 id="bal-ev-h" class="h2">Händelser</h2>
+          <ul class="events" id="bal-events"></ul>
+        </section>
+      </div>
+    </main>
+
+    <main id="view-receipts" class="view" hidden>
+      <section class="scan-card">
+        <div class="scan-text">
+          <h2 class="h2">Lägg till köp</h2>
+          <p class="hint">Har du ett kvitto: ta en bild så läser appen av butik, datum och summa. Kontrollera alltid beloppet innan du sparar.</p>
+          <p class="hint">Inget kvitto, till exempel onlineköp, Swish eller prenumeration? Välj Utan kvitto och skriv in det själv.</p>
+        </div>
+        <div class="scan-actions">
+          <label class="btn btn-primary btn-lg" for="file-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            Scanna kvitto
+          </label>
+          <input id="file-input" class="sr" type="file" accept="image/*">
+          <button class="btn btn-lg" id="add-manual" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>
+            Utan kvitto
+          </button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="list-h">
+        <div class="panel-head">
+          <h2 id="list-h" class="h2">Sparade köp</h2>
+          <p class="list-total" id="list-total"></p>
+        </div>
+        <div class="filters">
+          <label class="field">
+            <span>Sök</span>
+            <input id="f-search" type="search" placeholder="Butik eller anteckning">
+          </label>
+          <label class="field">
+            <span>Konto</span>
+            <select id="f-cat"></select>
+          </label>
+          <label class="field">
+            <span>Period</span>
+            <select id="f-period">
+              <option value="month">Vald månad</option>
+              <option value="all">Alla månader</option>
+            </select>
+          </label>
+        </div>
+        <ul class="receipt-list" id="receipt-list"></ul>
+        <p class="empty" id="receipt-empty" hidden></p>
+      </section>
+    </main>
+  </div>
+
+  <div class="fab-wrap">
+    <div class="fab-menu" id="fab-menu" hidden>
+      <label class="fab-item" for="file-input" id="fab-scan">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        Scanna kvitto
+      </label>
+      <button class="fab-item" type="button" id="fab-manual">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>
+        Utan kvitto
+      </button>
+    </div>
+    <button class="fab" type="button" id="fab" aria-label="Lägg till köp" aria-expanded="false" aria-controls="fab-menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+
+  <dialog id="receipt-dialog" aria-labelledby="dlg-title">
+    <form id="receipt-form" method="dialog" autocomplete="off">
+      <div class="dlg-head">
+        <h2 id="dlg-title" class="h2">Nytt kvitto</h2>
+        <button class="icon-btn" type="button" id="dlg-close" aria-label="Stäng">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="dlg-body">
+        <div class="dlg-img" id="dlg-img" hidden>
+          <img id="dlg-preview" alt="Förhandsvisning av kvittot">
+        </div>
+        <div class="dlg-fields">
+          <p class="scan-status" id="scan-status" role="status" hidden></p>
+          <p class="hint" id="dlg-hint" hidden></p>
+          <label class="field"><span>Butik eller sajt</span><input id="r-store" type="text" required></label>
+          <div class="two">
+            <label class="field"><span>Datum</span><input id="r-date" type="date" required></label>
+            <label class="field"><span>Belopp (kr)</span><input id="r-amount" type="number" inputmode="decimal" min="0" step="0.01" required></label>
+          </div>
+          <label class="field"><span>Konto</span><select id="r-cat" required></select></label>
+          <label class="field"><span>Anteckning</span><input id="r-note" type="text" placeholder="Valfritt"></label>
+          <div class="attach">
+            <label class="btn btn-ghost" for="r-image" id="r-image-label">Bifoga bild (t.ex. orderbekräftelse)</label>
+            <input id="r-image" class="sr" type="file" accept="image/*">
+            <button class="btn btn-ghost btn-danger" type="button" id="r-image-remove" hidden>Ta bort bild</button>
+          </div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="dlg-cancel">Avbryt</button>
+        <button class="btn btn-primary" type="submit" id="dlg-save">Spara kvitto</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="image-dialog" class="image-dialog" aria-label="Kvittobild">
+    <button class="icon-btn img-close" type="button" id="img-close" aria-label="Stäng">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <img id="big-img" alt="Kvitto">
+  </dialog>
+
+  <script src="config.js"></script>
+  <script src="parse.js"></script>
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
