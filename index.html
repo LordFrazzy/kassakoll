@@ -41,6 +41,7 @@
         <span>Kassakoll</span>
       </div>
       <nav class="tabs" aria-label="Sidor">
+        <span class="tab-ind" id="tab-ind" aria-hidden="true"></span>
         <button class="tab" id="tab-budget" data-view="budget" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg>
           <span>Budget</span>
@@ -67,11 +68,16 @@
   <div class="wrap">
     <div id="banner" class="banner" role="alert" hidden></div>
 
+    <div class="page-head">
+      <p class="page-kicker" id="page-kicker">Budget</p>
+      <p class="page-sub" id="page-sub">Planera månaden</p>
+    </div>
+
     <div class="monthbar" id="monthbar">
       <button class="icon-btn" id="prev-month" aria-label="Föregående månad">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
-      <h1 id="month-label" class="month-label">Oktober 2026</h1>
+      <h1 id="month-label" class="month-label" aria-live="polite">Oktober 2026</h1>
       <button class="icon-btn" id="next-month" aria-label="Nästa månad">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
       </button>
@@ -143,12 +149,63 @@
 
       <ul class="insights" id="insights" aria-label="Insikter om månaden" hidden></ul>
 
+      <div class="grid-two grade-row">
+        <section class="panel grade-card" id="grade-card" aria-labelledby="grade-h">
+          <div class="panel-head">
+            <h2 id="grade-h" class="h2">Månadsbetyg</h2>
+            <span class="grade-delta" id="grade-delta"></span>
+          </div>
+          <div class="grade-main">
+            <div class="ring" id="grade-ring" role="img" aria-label="Månadsbetyg">
+              <svg viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="ring-track" cx="60" cy="60" r="52"/>
+                <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="52"/>
+              </svg>
+              <div class="ring-text"><b id="grade-letter">–</b><span id="grade-score"></span></div>
+            </div>
+            <div class="grade-info">
+              <p class="grade-title" id="grade-title"></p>
+              <p class="hint" id="grade-text"></p>
+            </div>
+          </div>
+          <ol class="grade-history" id="grade-history" aria-label="Betyg senaste månaderna"></ol>
+          <details class="grade-details" id="grade-details">
+            <summary>Så räknas betyget</summary>
+            <div id="grade-breakdown"></div>
+          </details>
+        </section>
+
+        <section class="panel" aria-labelledby="pace-h">
+          <div class="panel-head">
+            <h2 id="pace-h" class="h2">Månaden hittills</h2>
+            <span class="pace-status" id="pace-status"></span>
+          </div>
+          <ul class="chart-legend" aria-hidden="true">
+            <li><span class="lg-line"></span>Spenderat</li>
+            <li><span class="lg-dash"></span>Jämn takt för budgeten</li>
+          </ul>
+          <div class="chart" id="pace-chart"></div>
+        </section>
+      </div>
+
       <section aria-labelledby="spent-h">
         <div class="section-head">
           <h2 id="spent-h" class="h2">Budget mot utfall</h2>
           <p class="hint" id="spent-hint">Så mycket som har gått från varje konto. Ändra budgeten under fliken Budget.</p>
         </div>
         <div id="spent-list" class="cats"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="months-h">
+        <div class="panel-head">
+          <h2 id="months-h" class="h2">Senaste 6 månaderna</h2>
+          <ul class="chart-legend" aria-hidden="true">
+            <li><span class="lg-box in"></span>Inkomster</li>
+            <li><span class="lg-box out"></span>Spenderat</li>
+          </ul>
+        </div>
+        <p class="hint">Klicka på en månad för att gå dit.</p>
+        <div class="chart" id="months-chart"></div>
       </section>
 
       <section class="panel" aria-labelledby="recent-h">

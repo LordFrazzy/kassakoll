@@ -542,6 +542,7 @@
     $('spent-hint').textContent = 'Så mycket som har gått från varje konto. Ändra budgeten under fliken Budget.' +
       (hidden ? ' Konton utan budget och kvitton visas inte (' + hidden + ' st).' : '');
     $('spent-list').innerHTML = bufferCard + cards;
+    renderSpentExtras();
   }
 
   /* ---------- Saldo ---------- */
@@ -1230,6 +1231,324 @@
     renderReceipts();
   }
 
+  /* ---------- Månadsbetyg och grafer (Spenderat) ---------- */
+
+  var LETTERS = [[90, 'A'], [80, 'B'], [70, 'C'], [60, 'D'], [50, 'E'], [0, 'F']];
+  var GRADE_TITLES = { A: 'Grymt jobbat!', B: 'Riktigt bra!', C: 'Helt okej', D: 'Lite på gränsen', E: 'Dags att se över', F: 'Tuff månad' };
+
+  function daysIn(month) { var p = month.split('-').map(Number); return new Date(p[0], p[1], 0).getDate(); }
+  function shortMonth(month) { var p = month.split('-').map(Number); return new Date(p[0], p[1] - 1, 1).toLocaleDateString('sv-SE', { month: 'short' }).replace('.', ''); }
+
+  // Betyg 0–100 för en månad. Två delar:
+  //  - Håller kontona (60 %): konton med budget som går över drar ner, viktat efter kontots storlek.
+  //    Ett konto som går 50 % över räknas som helt missat.
+  //  - Sparande (40 %): hur stor del av inkomsten som blir över (20 % eller mer = full pott, 0 % = hälften).
+  // Pågående månad räknas som prognos: det som är kvar på kontona antas gå åt.
+  function gradeFor(month, plans) {
+    var now = monthKey(new Date());
+    if (month > now) return null;
+    var plan = month === state.month ? state.plan : planFor(month, plans);
+    if (!plan) return null;
+    var isNow = month === now;
+    var limits = plan.limits || {};
+    var income = plan.income.reduce(function (s, i) { return s + i.amount; }, 0);
+    var rec = monthReceipts(month);
+    if (!rec.length && !isNow) return null;
+    var byAcc = {};
+    var spent = 0;
+    rec.forEach(function (r) { byAcc[r.category] = (byAcc[r.category] || 0) + r.amount; spent += r.amount; });
+    var limited = state.accounts.filter(function (a) { return limits[a.id] > 0; });
+    if (!income && !limited.length) return null;
+
+    var acc = null, worst = null, best = null;
+    if (limited.length) {
+      var weight = 0, penalty = 0;
+      limited.forEach(function (a) {
+        var L = limits[a.id], s = byAcc[a.id] || 0, over = Math.max(0, s - L);
+        penalty += Math.min(1, 2 * over / L) * L;
+        weight += L;
+        if (over > 0 && (!worst || over > worst.over)) worst = { id: a.id, over: over };
+        if (s > 0 && s <= L && (!best || s / L < best.ratio)) best = { id: a.id, ratio: s / L, left: L - s };
+      });
+      acc = Math.round(100 * (1 - penalty / weight));
+    }
+    var save = null, rate = null;
+    if (income) {
+      var projected = spent;
+      if (isNow) limited.forEach(function (a) { projected += Math.max(0, limits[a.id] - (byAcc[a.id] || 0)); });
+      rate = (income - projected) / income;
+      save = Math.round(Math.max(0, Math.min(100, 50 + rate * 250)));
+    }
+    var score = acc !== null && save !== null ? Math.round(acc * 0.6 + save * 0.4) : (acc !== null ? acc : save);
+    var letter = LETTERS.filter(function (l) { return score >= l[0]; })[0][1];
+    return { month: month, score: score, letter: letter, acc: acc, save: save, rate: rate, worst: worst, best: best, isNow: isNow };
+  }
+
+  function gradeTone(letter) { return letter <= 'B' ? 'good' : letter <= 'D' ? 'mid' : 'bad'; }
+
+  function renderGrade(plans) {
+    var g = gradeFor(state.month, plans);
+    var prev = gradeFor(shiftMonth(state.month, -1), plans);
+    var card = $('grade-card');
+    var fill = $('ring-fill');
+    var C = 2 * Math.PI * 52;
+    fill.style.strokeDasharray = C;
+    if (!g) {
+      card.className = 'panel grade-card';
+      $('grade-letter').textContent = '–';
+      $('grade-score').textContent = '';
+      $('grade-title').textContent = 'Inget betyg än';
+      $('grade-text').textContent = 'Lägg in inkomster och budget under fliken Budget, så får du ett betyg för månaden.';
+      $('grade-delta').textContent = '';
+      fill.style.strokeDashoffset = C;
+      $('grade-breakdown').innerHTML = '';
+      $('grade-details').hidden = true;
+    } else {
+      card.className = 'panel grade-card tone-' + gradeTone(g.letter);
+      $('grade-letter').textContent = g.letter;
+      $('grade-score').textContent = g.score + '/100';
+      $('grade-ring').setAttribute('aria-label', 'Månadsbetyg ' + g.letter + ', ' + g.score + ' av 100');
+      $('grade-title').textContent = GRADE_TITLES[g.letter];
+      var bits = [];
+      if (g.isNow) bits.push('Prognos för månaden utifrån det du spenderat och det som är kvar på kontona.');
+      if (g.worst) bits.push(accName(g.worst.id) + ' har gått ' + kr(g.worst.over) + ' över.');
+      else if (g.acc !== null) bits.push('Inget konto har gått över budget.');
+      if (g.rate !== null) bits.push(g.rate >= 0 ? 'Du får över ' + Math.round(g.rate * 100) + ' % av inkomsten.' : 'Du spenderar mer än du har in.');
+      $('grade-text').textContent = bits.join(' ');
+      var d = prev ? g.score - prev.score : null;
+      var delta = $('grade-delta');
+      delta.className = 'grade-delta' + (d > 0 ? ' up' : d < 0 ? ' down' : '');
+      delta.textContent = d === null ? '' : (d > 0 ? '▲ +' + d : d < 0 ? '▼ −' + Math.abs(d) : '± 0') + ' mot ' + shortMonth(prev.month);
+      // Ringen fylls från noll när värdet ändras
+      var target = C * (1 - g.score / 100);
+      if (calm()) fill.style.strokeDashoffset = target;
+      else { fill.style.strokeDashoffset = C; void fill.getBoundingClientRect(); requestAnimationFrame(function () { fill.style.strokeDashoffset = target; }); }
+
+      function part(label, val, note) {
+        return val === null ? '' : '<div class="gb-row"><div class="gb-top"><span>' + label + '</span><b>' + val + '/100</b></div>' +
+          '<div class="bar"><i style="width:' + val + '%"></i></div><p class="hint">' + note + '</p></div>';
+      }
+      var html = part('Håller kontona · 60 %', g.acc, 'Konton med budget som går över drar ner. Ett konto som går 50 % över räknas som helt missat.') +
+        part('Sparande · 40 %', g.save, 'Hur mycket av inkomsten som blir över. 20 % eller mer ger full pott, 0 % ger hälften.');
+      if (g.best) html += '<p class="gb-note good">Bäst: ' + esc(accName(g.best.id)) + ', ' + kr(g.best.left) + ' kvar (' + Math.round(g.best.ratio * 100) + ' % använt)</p>';
+      if (g.worst) html += '<p class="gb-note bad">Behöver koll: ' + esc(accName(g.worst.id)) + ', ' + kr(g.worst.over) + ' över</p>';
+      $('grade-breakdown').innerHTML = html;
+      $('grade-details').hidden = false;
+    }
+
+    // Betyg för de senaste sex månaderna; klick går till månaden
+    var hist = [];
+    for (var i = 5; i >= 0; i--) {
+      var m = shiftMonth(state.month, -i);
+      var h = gradeFor(m, plans);
+      hist.push('<li><button type="button" class="gh' + (m === state.month ? ' current' : '') + (h ? ' tone-' + gradeTone(h.letter) : ' none') + '" data-goto-month="' + m + '"' +
+        ' aria-label="' + monthLabel(m) + (h ? ', betyg ' + h.letter : ', inget betyg') + '"><b>' + (h ? h.letter : '–') + '</b><span>' + shortMonth(m) + '</span></button></li>');
+    }
+    $('grade-history').innerHTML = hist.join('');
+  }
+
+  // Delad hovring för diagrammen: hittar närmaste punkt och visar en ruta
+  function chartHover(box, svg, W, xs, onShow) {
+    var tip = box.querySelector('.tip');
+    function show(ev) {
+      var r = svg.getBoundingClientRect();
+      var px = (ev.clientX - r.left) * (W / r.width);
+      var best = 0;
+      for (var i = 1; i < xs.length; i++) if (Math.abs(xs[i] - px) < Math.abs(xs[best] - px)) best = i;
+      var pos = onShow(best, tip);
+      tip.hidden = false;
+      tip.style.left = Math.max(80, Math.min(r.width - 80, pos.x * (r.width / W))) + 'px';
+      tip.style.top = Math.max(0, pos.y * (r.height / svg.viewBox.baseVal.height) - 74) + 'px';
+    }
+    function hide() { tip.hidden = true; onShow(-1, tip); }
+    svg.addEventListener('pointermove', show);
+    svg.addEventListener('pointerdown', show);
+    svg.addEventListener('pointerleave', hide);
+  }
+
+  function niceStep(span, count) {
+    var raw = span / count;
+    var mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+    return [1, 2, 5, 10].map(function (k) { return k * mag; }).filter(function (s) { return s >= raw; })[0];
+  }
+
+  // Månaden hittills: spenderat dag för dag mot en jämn takt för budgeten
+  function drawPace() {
+    var box = $('pace-chart');
+    var month = state.month;
+    var now = monthKey(new Date());
+    var dim = daysIn(month);
+    var lastDay = month < now ? dim : month === now ? new Date().getDate() : 0;
+    var target = state.alloc ? (state.alloc.planned || state.alloc.income) : 0;
+    var status = $('pace-status');
+    if (!lastDay) {
+      box.innerHTML = '<p class="hint chart-empty">Månaden har inte börjat än.</p>';
+      status.textContent = '';
+      return;
+    }
+    var perDay = new Array(dim + 1).fill(0);
+    monthReceipts(month).forEach(function (r) { perDay[Number(r.date.slice(8, 10))] += r.amount; });
+    var cum = [0];
+    for (var d = 1; d <= dim; d++) cum[d] = cum[d - 1] + perDay[d];
+
+    var W = Math.max(280, box.clientWidth || 480), H = W < 420 ? 190 : 220;
+    var padL = 8, padR = 8, padT = 14, padB = 26;
+    var max = Math.max(target, cum[lastDay], 1) * 1.08;
+    function x(day) { return padL + (day / dim) * (W - padL - padR); }
+    function y(v) { return padT + (1 - v / max) * (H - padT - padB); }
+
+    var step = niceStep(max, 3), grid = '';
+    for (var gv = step; gv < max; gv += step) {
+      grid += '<line class="grid" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(gv).toFixed(1) + '" y2="' + y(gv).toFixed(1) + '"/>' +
+        '<text class="axis" x="' + (padL + 2) + '" y="' + (y(gv) - 4).toFixed(1) + '">' + kr(gv) + '</text>';
+    }
+    var pts = [];
+    for (d = 0; d <= lastDay; d++) pts.push(x(d).toFixed(1) + ' ' + y(cum[d]).toFixed(1));
+    var line = 'M' + pts.join('L');
+    var area = line + 'L' + x(lastDay).toFixed(1) + ' ' + y(0) + 'L' + x(0) + ' ' + y(0) + 'Z';
+    var pace = target ? '<line class="pace" x1="' + x(0) + '" y1="' + y(0) + '" x2="' + x(dim) + '" y2="' + y(target).toFixed(1) + '"/>' : '';
+    var ahead = target ? cum[lastDay] - target * lastDay / dim : 0;
+    var over = target && ahead > 0;
+
+    box.innerHTML = '<svg class="pace-svg' + (over ? ' over' : '') + '" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Spenderat dag för dag i ' + monthLabel(month) + ': ' + kr(cum[lastDay]) + (target ? ', jämn takt hade varit ' + kr(target * lastDay / dim) : '') + '">' +
+      '<defs><linearGradient id="pace-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="g0"/><stop offset="1" class="g1"/></linearGradient></defs>' +
+      grid + '<line class="base0" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>' + pace +
+      '<path class="area" d="' + area + '"/><path class="line" d="' + line + '"/>' +
+      '<circle class="end" cx="' + x(lastDay).toFixed(1) + '" cy="' + y(cum[lastDay]).toFixed(1) + '" r="4.5"/>' +
+      '<text class="axis" x="' + padL + '" y="' + (H - 8) + '">1 ' + shortMonth(month) + '</text>' +
+      '<text class="axis" text-anchor="end" x="' + (W - padR) + '" y="' + (H - 8) + '">' + dim + ' ' + shortMonth(month) + '</text>' +
+      '<g class="hover" visibility="hidden"><line class="cross" y1="' + padT + '" y2="' + y(0) + '"/><circle class="hdot" r="5"/></g>' +
+      '<rect class="hit" x="0" y="0" width="' + W + '" height="' + H + '"/></svg><div class="tip" hidden></div>';
+
+    if (target) {
+      status.className = 'pace-status ' + (over ? 'bad' : 'good');
+      status.textContent = over ? '▲ ' + kr(ahead) + ' före takten' : '▼ ' + kr(-ahead) + ' under takten';
+    } else {
+      status.textContent = '';
+    }
+    var svg = box.querySelector('svg');
+    var hover = svg.querySelector('.hover');
+    var xs = [];
+    for (d = 1; d <= lastDay; d++) xs.push(x(d));
+    chartHover(box, svg, W, xs, function (i, tip) {
+      if (i < 0) { hover.setAttribute('visibility', 'hidden'); return null; }
+      var day = i + 1, cx = x(day), cy = y(cum[day]);
+      hover.setAttribute('visibility', 'visible');
+      hover.querySelector('.cross').setAttribute('x1', cx);
+      hover.querySelector('.cross').setAttribute('x2', cx);
+      hover.querySelector('.hdot').setAttribute('cx', cx);
+      hover.querySelector('.hdot').setAttribute('cy', cy);
+      tip.innerHTML = '<b>' + kr(cum[day]) + '</b><span>' + day + ' ' + shortMonth(month) + (perDay[day] ? ' · ' + kr(perDay[day]) + ' den dagen' : '') + '</span>' +
+        (target ? '<span>Jämn takt: ' + kr(target * day / dim) + '</span>' : '');
+      return { x: cx, y: cy };
+    });
+  }
+
+  // Senaste sex månaderna: inkomster och spenderat som staplar, klick går till månaden
+  function drawMonths(plans) {
+    var box = $('months-chart');
+    var months = [];
+    for (var i = 5; i >= 0; i--) {
+      var m = shiftMonth(state.month, -i);
+      var plan = m === state.month ? state.plan : planFor(m, plans);
+      months.push({
+        m: m,
+        income: plan ? plan.income.reduce(function (s, x) { return s + x.amount; }, 0) : 0,
+        spent: monthReceipts(m).reduce(function (s, r) { return s + r.amount; }, 0)
+      });
+    }
+    var W = Math.max(280, box.clientWidth || 600), H = W < 420 ? 200 : 230;
+    var padL = 8, padR = 8, padT = 14, padB = 28;
+    var max = Math.max.apply(null, months.map(function (o) { return Math.max(o.income, o.spent); }).concat([1])) * 1.1;
+    var slot = (W - padL - padR) / months.length;
+    var bw = Math.min(26, slot * 0.28);
+    function y(v) { return padT + (1 - v / max) * (H - padT - padB); }
+    var base = y(0);
+    var step = niceStep(max, 3), grid = '';
+    for (var gv = step; gv < max; gv += step) {
+      grid += '<line class="grid" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(gv).toFixed(1) + '" y2="' + y(gv).toFixed(1) + '"/>' +
+        '<text class="axis" x="' + (padL + 2) + '" y="' + (y(gv) - 4).toFixed(1) + '">' + kr(gv) + '</text>';
+    }
+    // Stapel med rundade toppar, förankrad mot nollinjen
+    function bar(x0, v, cls) {
+      var h = Math.max(0, base - y(v));
+      if (h < 1) return '';
+      var r = Math.min(4, h, bw / 2);
+      return '<path class="' + cls + '" d="M' + x0 + ' ' + base + 'V' + (base - h + r) + 'Q' + x0 + ' ' + (base - h) + ' ' + (x0 + r) + ' ' + (base - h) +
+        'H' + (x0 + bw - r) + 'Q' + (x0 + bw) + ' ' + (base - h) + ' ' + (x0 + bw) + ' ' + (base - h + r) + 'V' + base + 'Z"/>';
+    }
+    var groups = months.map(function (o, k) {
+      var cx = padL + slot * k + slot / 2;
+      var cur = o.m === state.month;
+      return '<g class="mg' + (cur ? ' current' : '') + '" data-goto-month="' + o.m + '">' +
+        '<rect class="mg-bg" x="' + (cx - slot / 2 + 3) + '" y="' + padT + '" width="' + (slot - 6) + '" height="' + (H - padT - 4) + '" rx="10"/>' +
+        bar(cx - bw - 1, o.income, 'b-in') + bar(cx + 1, o.spent, 'b-out' + (o.income && o.spent > o.income ? ' over' : '')) +
+        '<text class="axis mlabel" text-anchor="middle" x="' + cx + '" y="' + (H - 9) + '">' + shortMonth(o.m) + '</text></g>';
+    }).join('');
+    box.innerHTML = '<svg class="months-svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Inkomster och spenderat de senaste sex månaderna">' +
+      grid + groups + '<line class="base0" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + base + '" y2="' + base + '"/></svg><div class="tip" hidden></div>';
+    var svg = box.querySelector('svg');
+    var xs = months.map(function (o, k) { return padL + slot * k + slot / 2; });
+    var gs = svg.querySelectorAll('.mg');
+    chartHover(box, svg, W, xs, function (k, tip) {
+      gs.forEach(function (g, j) { g.classList.toggle('hot', j === k); });
+      if (k < 0) return null;
+      var o = months[k];
+      var diff = o.income - o.spent;
+      tip.innerHTML = '<b>' + monthLabel(o.m) + '</b><span>Spenderat ' + kr(o.spent) + '</span><span>Inkomster ' + kr(o.income) + '</span>' +
+        (o.income ? '<span>' + (diff >= 0 ? 'Över: ' + kr(diff) : 'Minus: ' + kr(-diff)) + '</span>' : '');
+      return { x: xs[k], y: y(Math.max(o.income, o.spent)) };
+    });
+  }
+
+  var extrasTicket = 0;
+  async function renderSpentExtras() {
+    var ticket = ++extrasTicket;
+    var plans = await DB.all('plans');
+    if (ticket !== extrasTicket) return;
+    renderGrade(plans);
+    drawPace();
+    drawMonths(plans);
+  }
+
+  async function gotoMonth(m) {
+    if (!m || m === state.month) return;
+    state.month = m;
+    state.confirmDelete = null;
+    await renderAll();
+    enterView(state.view);
+    window.scrollTo({ top: 0, behavior: calm() ? 'auto' : 'smooth' });
+  }
+
+  /* ---------- Menyn: glidande markering och adresser per flik ---------- */
+
+  var ROUTES = { budget: 'budget', spent: 'spenderat', receipts: 'kvitton', balance: 'saldo' };
+  var PAGE_TEXT = {
+    budget: ['Budget', 'Planera månaden: inkomster och en maxsumma per konto'],
+    spent: ['Spenderat', 'Så går det: betyg, grafer och budget mot utfall'],
+    receipts: ['Kvitton', 'Scanna kvitton och se alla dina köp'],
+    balance: ['Saldo', 'Pengarna på kontot över tid, och dina mål']
+  };
+
+  function viewFromHash() {
+    var h = location.hash.replace('#', '');
+    for (var v in ROUTES) if (ROUTES[v] === h) return v;
+    return null;
+  }
+
+  function moveIndicator() {
+    var ind = $('tab-ind');
+    var tab = $('tab-' + state.view);
+    if (!ind || !tab || !tab.offsetWidth) return;
+    var first = !ind.classList.contains('ready');
+    // Första gången placeras markeringen direkt; sedan glider den mellan flikarna
+    if (first) ind.style.transition = 'none';
+    ind.style.width = tab.offsetWidth + 'px';
+    ind.style.transform = 'translateX(' + tab.offsetLeft + 'px)';
+    if (first) { void ind.offsetWidth; ind.style.transition = ''; }
+    ind.classList.add('ready');
+  }
+
   var VIEWS = ['budget', 'spent', 'receipts', 'balance'];
 
   function setView(v) {
@@ -1241,13 +1560,25 @@
     });
     // Saldot gäller hela tiden, inte en månad
     $('monthbar').hidden = v === 'balance';
+    $('page-kicker').textContent = PAGE_TEXT[v][0];
+    $('page-sub').textContent = PAGE_TEXT[v][1];
+    document.title = PAGE_TEXT[v][0] + ' · Kassakoll';
+    moveIndicator();
+    // Graferna mäter sin bredd, så de ritas om när fliken blir synlig
+    if (v === 'spent' && state.alloc) renderSpentExtras();
     if (v === 'balance' && state.balanceData) { state.chartAnimate = true; renderBalanceView(state.balanceData); }
     enterView(v);
     try { localStorage.setItem('kassakoll-view', v); } catch (e) { /* bara en bekvämlighet */ }
   }
 
+  // Byter flik via adressen (#spenderat osv.), så att bakåtknappen och länkar fungerar
+  function navigate(v) {
+    if (viewFromHash() === v) setView(v);
+    else location.hash = ROUTES[v];
+  }
+
   function goTo(v) {
-    setView(v);
+    navigate(v);
     window.scrollTo(0, 0);
   }
 
@@ -1260,8 +1591,29 @@
 
   function bind() {
     VIEWS.forEach(function (name) {
-      $('tab-' + name).addEventListener('click', function () { setView(name); });
+      $('tab-' + name).addEventListener('click', function () { navigate(name); });
     });
+    window.addEventListener('hashchange', function () {
+      var v = viewFromHash();
+      if (v && v !== state.view) setView(v);
+    });
+    // Piltangenter flyttar mellan flikarna
+    document.querySelector('.tabs').addEventListener('keydown', function (ev) {
+      if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+      var i = VIEWS.indexOf(state.view) + (ev.key === 'ArrowRight' ? 1 : -1);
+      var v = VIEWS[(i + VIEWS.length) % VIEWS.length];
+      navigate(v);
+      $('tab-' + v).focus();
+      ev.preventDefault();
+    });
+    // Klick på en månad i betygshistoriken eller månadsgrafen
+    ['grade-history', 'months-chart'].forEach(function (id) {
+      $(id).addEventListener('click', function (ev) {
+        var t = ev.target.closest('[data-goto-month]');
+        if (t) gotoMonth(t.getAttribute('data-goto-month'));
+      });
+    });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveIndicator);
     $('see-all').addEventListener('click', function () { goTo('receipts'); });
     $('go-spent').addEventListener('click', function () { goTo('spent'); });
 
@@ -1318,7 +1670,9 @@
     window.addEventListener('resize', function () {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(function () {
+        moveIndicator();
         if (state.view === 'balance' && state.balanceData) renderBalanceView(state.balanceData);
+        if (state.view === 'spent' && state.alloc) renderSpentExtras();
       }, 150);
     });
     $('prev-month').addEventListener('click', function () { changeMonth(-1); });
@@ -1670,7 +2024,7 @@
     bind();
     var saved = null;
     try { saved = localStorage.getItem('kassakoll-view'); } catch (e) { /* ignoreras */ }
-    setView(saved || 'budget');
+    setView(viewFromHash() || saved || 'budget');
     // Fel vid sparning till molnet (t.ex. utan internet) ska synas, inte försvinna tyst
     window.addEventListener('unhandledrejection', function (ev) {
       if (ev.reason && ev.reason.cloud) showBanner('Kunde inte spara till ditt konto. Kontrollera internetanslutningen och försök igen.', true);

@@ -41,3 +41,12 @@ när målet skapades). Uppskattning från genomsnittlig ökning per dag senaste 
 Om config.js är ifylld laddas supabase-js (CDN) och startCloud() i app.js visar inloggningen (#auth) före allt annat.
 Efter inloggning DB.useCloud(); är molnet tomt flyttas lokal IndexedDB-data upp (migrateLocal, lokal kopia ligger kvar).
 Kvittobilder kan vara Blob eller URL-sträng: använd imageUrl()/freeUrl() i app.js, inte URL.createObjectURL direkt.
+
+## Spenderat: betyg och grafer
+gradeFor(månad) i app.js: 60 % håller kontona (överdrag/budget, 50 % över = helt missat), 40 % sparande
+(andel av inkomsten som blir över, 20 % = full pott). Pågående månad = prognos. Bokstav A–F.
+drawPace() = spenderat dag för dag mot jämn takt, drawMonths() = 6 månader staplar. Klick på månad -> gotoMonth().
+
+## Menyn
+Flikarna har adresser: #budget, #spenderat, #kvitton, #saldo (ROUTES i app.js). navigate() sätter hash, hashchange byter vy.
+Glidande markering .tab-ind placeras av moveIndicator().
