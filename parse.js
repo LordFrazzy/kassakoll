@@ -277,7 +277,162 @@
     };
   }
 
-  var api = { parseAmount: parseAmount, parseReceipt: parseReceipt, findTotal: findTotal, findDate: findDate, amountsIn: amountsIn };
+  /* ---------- Bankutdrag (skärmdump från bankappen) ---------- */
+
+  // Ett belopp på en bankrad: "-245,50", "−1 245,50 kr", "-SEK 245.50", "-245 kr", "245,50"
+  var BANK_AMOUNT_RE = /([-−–+])?\s?(?:(?:SEK|kr)\s?)?(\d{1,3}(?:[  .]\d{3})+|\d+)(?:\s?[.,]\s?(\d{2}))?(?!\d)(\s?(?:kr|SEK)\b)?/gi;
+  var WEEKDAYS = /^([il1|]\s?dag|[il1|]\s?går|today|yesterday|mån|tis|ons|tors?|fre|lör|sön)(dag)?\.?(?![a-zåäö])/i;
+
+  // Byter datum och klockslag mot mellanslag (samma längd, så att positionerna stämmer)
+  function maskDates(line) {
+    var blank = function (t) { return t.replace(/./g, ' '); };
+    return line
+      .replace(/\b\d{2,4}[-./]\d{1,2}[-./]\d{1,4}\b/g, blank)
+      .replace(/\b\d{1,2}[/.]\d{1,2}\b(?![.,]\d)/g, blank)
+      .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, blank)
+      .replace(/\b\d{1,2}\.?\s(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)/gi, blank);
+  }
+
+  function bankAmounts(line) {
+    var out = [];
+    var m;
+    var src = maskDates(line);
+    BANK_AMOUNT_RE.lastIndex = 0;
+    while ((m = BANK_AMOUNT_RE.exec(src))) {
+      var hasDec = m[3] != null;
+      var hasSign = !!m[1] && m[1] !== '+';
+      var hasKr = !!m[4] || /SEK|kr/i.test(m[0].slice(0, 6));
+      // Heltal räknas bara som belopp med minustecken eller "kr" (annars är det t.ex. ett datum eller kortnummer)
+      if (!hasDec && !hasSign && !hasKr) continue;
+      if (!hasDec && /^\d{5,}$/.test(m[2])) continue;
+      var n = parseFloat(m[2].replace(/[\s .]/g, '') + (hasDec ? '.' + m[3] : ''));
+      if (!isFinite(n) || n <= 0 || n >= 1000000) continue;
+      out.push({ value: n, negative: hasSign, plus: m[1] === '+', index: m.index, text: m[0] });
+    }
+    return out;
+  }
+
+  // Datum på en rad eller som rubrik. Utan årtal väljs det år som gör att datumet inte ligger i framtiden.
+  function bankDate(line, now) {
+    var d = new Date(now);
+    var src = line.toLowerCase();
+    // OCR läser ofta stora I som l, 1 eller |
+    if (/^\s*([il1|]\s?dag|today)\b/.test(src)) return isoOfDate(d);
+    if (/^\s*([il1|]\s?går|yesterday)(?![a-zåäö])/.test(src)) { d.setDate(d.getDate() - 1); return isoOfDate(d); }
+    var full = findDate(line, now);
+    if (full) return full;
+    var m = src.match(/\b(\d{1,2})\s?(?:\.|\s)\s?([a-zåäö]{3})[a-zåäö]*\.?(?:\s+(20\d{2}))?/);
+    if (m && MONTHS[m[2]]) return withYear(+m[1], MONTHS[m[2]], m[3] ? +m[3] : 0, now);
+    m = src.match(/^\s*(\d{1,2})\s?[/.]\s?(\d{1,2})\b(?![/.]\d)/);
+    if (m) return withYear(+m[1], +m[2], 0, now);
+    // Kortköp-rader har ofta datumet som ÅÅMMDD: "KORTKÖP 251118 WILLYS"
+    m = src.match(/\b(2\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+    if (m) { var iso = validDate(2000 + +m[1], +m[2], +m[3]); if (plausible(iso, now)) return iso; }
+    return null;
+  }
+
+  function isoOfDate(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function withYear(day, month, year, now) {
+    var y = year || new Date(now).getFullYear();
+    var iso = validDate(y, month, day);
+    if (!year && iso && new Date(iso + 'T12:00').getTime() > now + 86400000 * 1.5) iso = validDate(y - 1, month, day);
+    return iso;
+  }
+
+  // Ord på bankrader som inte är en del av butiksnamnet
+  var BANK_NOISE = /(?<![A-Za-zÅÄÖåäö])(kortköp|kortkop|köp|kop|reserverat|reservation|prel|preliminär|preliminart|bokförd|bokford|debitering|betalning|autogiro|e-faktura|efaktura|överföring|kortnr|sek|kr|card|purchase|pending|visa|mastercard|debit)(?![A-Za-zÅÄÖåäö])/gi;
+
+  function cleanMerchant(text) {
+    var s = text
+      .replace(/\b\d{4}[-./]\d{1,2}[-./]\d{1,2}\b/g, ' ')
+      .replace(/\b\d{1,2}\s?(?:\.|\s)\s?(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)[a-zåäö]*\.?(?:\s+20\d{2})?/gi, ' ')
+      .replace(/\b\d{6}\b/g, ' ')
+      .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
+      .replace(/\b(?=[A-Za-z]*\d[A-Za-z]*\d)(?=\w*[A-Za-z])[A-Za-z0-9]{5,}\b/g, ' ') // referenskoder som P3E4F1
+      .replace(/^[KkCc]\s?\*\s?/, '')
+      .replace(BANK_NOISE, ' ')
+      .replace(/[*#|_=~<>«»©®°•·…]+/g, ' ')
+      .replace(/\b\d{3,}\b/g, ' ')
+      .replace(/\s{2,}/g, ' ');
+    s = s.replace(/^[^A-Za-zÅÄÖåäö0-9]+|[^A-Za-zÅÄÖåäö0-9)]+$/g, '').trim();
+    // VERSALER från banken blir "Willys Göteborg"
+    if (s && s === s.toUpperCase()) {
+      s = s.toLowerCase().replace(/(^|[\s\-/&.])([a-zåäö])/g, function (_, a, b) { return a + b.toUpperCase(); });
+    }
+    return s.slice(0, 40);
+  }
+
+  function letterCount(s) { return (s.match(/[A-Za-zÅÄÖåäö]/g) || []).length; }
+
+  // Tolkar texten från en skärmdump av kontohändelser till en lista med köp.
+  // Varje rad: { store, date, amount, incoming, category, raw }
+  function parseBank(text, nowMs) {
+    var now = nowMs || Date.now();
+    var lines = String(text || '').split(/\r?\n/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+    var rows = [];
+    var currentDate = null;
+    var pendingName = null; // namn på en rad utan belopp, beloppet kan stå på raden under
+    var anyNegative = false;
+
+    lines.forEach(function (line) {
+      var amounts = bankAmounts(line);
+      var letters = letterCount(line);
+      var date = bankDate(line, now);
+
+      if (!amounts.length) {
+        // Rubrik med datum ("Idag", "Måndag 18 nov", "18 november 2026")
+        var rest = cleanMerchant(line.replace(WEEKDAYS, ' '));
+        if (date && letterCount(rest) < 3) { currentDate = date; pendingName = null; return; }
+        if (date && WEEKDAYS.test(line)) { currentDate = date; pendingName = null; return; }
+        // Kategori- eller statusrad under ett köp ("Kortköp", "Reserverat") hör till raden ovan
+        if (/^(kortköp|kortkop|reserverat|swish|autogiro|e-faktura|överföring|insättning|lön|prel)/i.test(line) && rows.length && !pendingName) return;
+        if (letters >= 3) pendingName = { text: line, date: date };
+        return;
+      }
+
+      // Det första beloppet är händelsen, ett andra är oftast saldot efter
+      var a = amounts[0];
+      var nameText = line.slice(0, a.index) + ' ' + line.slice(a.index + a.text.length);
+      amounts.slice(1).forEach(function (b) { nameText = nameText.replace(b.text, ' '); });
+      var store = cleanMerchant(nameText);
+      if (letterCount(store) < 2 && pendingName) {
+        store = cleanMerchant(pendingName.text);
+        if (!date) date = pendingName.date;
+      }
+      pendingName = null;
+      if (letterCount(store) < 2) return; // t.ex. "Saldo 12 345,67" utan text kvar, eller skräp
+      if (/^(saldo|disponibelt|tillgängligt|totalt|summa|kontosaldo|beviljad kredit)\b/i.test(store)) return;
+      if (a.negative) anyNegative = true;
+      var key = keyText(store);
+      var key2 = store.toLowerCase().replace(/[^a-z0-9åäö]/g, ''); // behåller siffror (OKQ8, St1)
+      var category = '';
+      for (var c = 0; c < CHAINS.length; c++) {
+        if (CHAINS[c][0].test(key) || CHAINS[c][0].test(key2)) { category = CHAINS[c][2]; if (CHAINS[c][1] && store.length > 24) store = CHAINS[c][1]; break; }
+      }
+      if (!category) category = guessCategory(null, store);
+      rows.push({
+        store: store,
+        date: date || currentDate,
+        amount: Math.round(a.value * 100) / 100,
+        negative: a.negative,
+        plus: a.plus,
+        category: category,
+        raw: line
+      });
+    });
+
+    // Har banken minustecken på köpen är rader utan minus pengar in (lön, Swish till dig)
+    rows.forEach(function (r) {
+      r.incoming = r.plus || (anyNegative && !r.negative) || /^(lön|insättning|swish från|återbetalning)/i.test(r.store);
+      delete r.negative; delete r.plus;
+    });
+    return rows;
+  }
+
+  var api = { parseAmount: parseAmount, parseReceipt: parseReceipt, parseBank: parseBank, findTotal: findTotal, findDate: findDate, amountsIn: amountsIn };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KvittoParse = api;
 })(typeof window !== 'undefined' ? window : globalThis);

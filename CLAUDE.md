@@ -47,6 +47,13 @@ gradeFor(månad) i app.js: 60 % håller kontona (överdrag/budget, 50 % över = 
 (andel av inkomsten som blir över, 20 % = full pott). Pågående månad = prognos. Bokstav A–F.
 drawPace() = spenderat dag för dag mot jämn takt, drawMonths() = 6 månader staplar. Klick på månad -> gotoMonth().
 
+## Från bankappen
+Skärmdump(ar) av kontohändelser -> scanBank() i app.js: prepareScreenshot() (förstorar, vänder mörkt läge, färgad text blir mörk),
+Tesseract psm 6 (psm 4 om få rader), KvittoParse.parseBank() i parse.js ger rader {store, date, amount, incoming, category}.
+Datumrubriker ("Idag", "Igår", "Fre 20 nov") gäller raderna under. Andra belopp på en rad = saldo, ignoreras.
+Granskning i #bank-dialog: pengar in och troliga dubbletter (samma belopp ±3 dagar) är urbockade. Sparas som kvitton utan bild,
+note "Från bankappen". Valt konto per butik minns i settings/merchants (map: merchantKey -> konto-id).
+
 ## Menyn
 Flikarna har adresser: #budget, #spenderat, #kvitton, #saldo (ROUTES i app.js). navigate() sätter hash, hashchange byter vy.
 Glidande markering .tab-ind placeras av moveIndicator().

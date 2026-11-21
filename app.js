@@ -1156,6 +1156,269 @@
     }
   }
 
+  /* ---------- Köp från bankappen (skärmdump av kontohändelser) ---------- */
+
+  // Skärmdumpar är skarpa men texten är liten och ofta ljus på mörkt: förstora, gråskala, vänd mörkt läge.
+  async function prepareScreenshot(file) {
+    var bmp = await createImageBitmap(file);
+    var scale = Math.min(3, Math.max(1, 1800 / bmp.width));
+    if (bmp.width * bmp.height * scale * scale > 16e6) scale = Math.max(0.5, Math.sqrt(16e6 / (bmp.width * bmp.height)));
+    var w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+    var img = ctx.getImageData(0, 0, w, h);
+    var px = img.data;
+    var n = w * h;
+    var total = 0;
+    for (var i = 0; i < n; i++) total += (px[i * 4] * 299 + px[i * 4 + 1] * 587 + px[i * 4 + 2] * 114) / 1000;
+    var invert = total / n < 110; // mörkt läge
+    for (i = 0; i < n; i++) {
+      var r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
+      // Färgad text (grön för pengar in, röd) ska bli lika tydlig som vit eller svart text:
+      // i mörkt läge räknas den ljusaste kanalen, i ljust läge den mörkaste
+      var v = invert ? 255 - Math.max(r, g, b) : Math.min(r, g, b);
+      // Ljusgrå bakgrundsrutor blir vita och grå text (datum, rubriker) mörkare, så att allt går att läsa
+      v = v > 215 ? 255 : v * 0.6;
+      px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  var bank = { rows: [], token: 0, merchants: null };
+
+  function merchantKey(store) {
+    return String(store || '').toLowerCase()
+      .replace(/^(k|c)\s?\*\s?/, '')
+      .replace(/[^a-zåäö]+/g, ' ').trim().split(' ').slice(0, 3).join(' '); // tre ord: "swish till kim" ≠ "swish till alva"
+  }
+
+  async function loadMerchants() {
+    if (bank.merchants) return bank.merchants;
+    var saved = null;
+    try { saved = await DB.get('settings', 'merchants'); } catch (e) { /* ingen sparad lista */ }
+    bank.merchants = (saved && saved.map) || {};
+    return bank.merchants;
+  }
+
+  // Tolkaren gissar ett standardkontonamn; matcha mot kontona eftersom de kan vara omdöpta eller borttagna
+  function accountFor(store, guess) {
+    var remembered = bank.merchants && bank.merchants[merchantKey(store)];
+    if (remembered && accById(remembered)) return remembered;
+    if (!guess) return '';
+    var a = state.accounts.filter(function (x) { return x.id === guess || x.name.toLowerCase() === guess.toLowerCase(); })[0];
+    return a ? a.id : '';
+  }
+
+  // Ett köp med samma belopp några dagar ifrån (kortköp bokförs ofta 1–3 dagar efter kvittot) finns troligen redan
+  function existingMatch(row) {
+    if (!row.date) return null;
+    var t = new Date(row.date + 'T12:00').getTime();
+    return state.receipts.filter(function (r) {
+      return Math.abs(r.amount - row.amount) < 0.01 && Math.abs(new Date(r.date + 'T12:00').getTime() - t) <= 86400000 * 3;
+    })[0] || null;
+  }
+
+  function setBankStatus(msg, warn) {
+    var el = $('bank-status');
+    el.textContent = msg;
+    el.className = 'scan-status' + (warn ? ' warn' : '');
+    el.hidden = !msg;
+  }
+
+  function openBankDialog() {
+    bank.rows = [];
+    $('bank-list').innerHTML = '';
+    $('bank-imgs').innerHTML = '';
+    $('bank-ocr-text').textContent = '';
+    $('bank-ocr').hidden = true;
+    $('bank-ocr').open = false;
+    $('bank-hint').hidden = true;
+    $('bank-tools').hidden = true;
+    updateBankSave();
+    var d = $('bank-dialog');
+    if (!d.open) d.showModal();
+  }
+
+  function closeBankDialog() {
+    bank.token++;
+    var d = $('bank-dialog');
+    if (d.open) d.close();
+    Array.prototype.forEach.call($('bank-imgs').querySelectorAll('img'), function (img) { freeUrl(img.src); });
+    $('bank-imgs').innerHTML = '';
+    $('bank-input').value = '';
+  }
+
+  async function scanBank(files) {
+    openBankDialog();
+    var token = ++bank.token;
+    await loadMerchants();
+    var texts = [];
+    var found = [];
+    for (var f = 0; f < files.length; f++) {
+      var file = files[f];
+      var label = files.length > 1 ? 'Läser bild ' + (f + 1) + ' av ' + files.length + '…' : 'Läser skärmdumpen…';
+      setBankStatus(label);
+      try {
+        var u = imageUrl(file);
+        var im = document.createElement('img');
+        im.src = u;
+        im.alt = 'Skärmdump ' + (f + 1);
+        $('bank-imgs').appendChild(im);
+        ocrProgress = function (p) { if (token === bank.token) setBankStatus(label + ' ' + Math.round(p * 100) + ' %'); };
+        var canvas = await prepareScreenshot(file);
+        if (token !== bank.token) return;
+        var text = await ocr(canvas, '6');
+        var rows = KvittoParse.parseBank(text);
+        // Få rader: prova att läsa spalt för spalt i stället
+        if (rows.length < 2) {
+          var text2 = await ocr(canvas, '4');
+          var rows2 = KvittoParse.parseBank(text2);
+          if (rows2.length > rows.length) { text = text2; rows = rows2; }
+        }
+        if (token !== bank.token) return;
+        texts.push(text.trim());
+        found = found.concat(rows);
+      } catch (e) {
+        texts.push('(Bild ' + (f + 1) + ' kunde inte läsas)');
+      }
+    }
+    ocrProgress = null;
+    if (token !== bank.token) return;
+
+    // Överlappande skärmdumpar ger samma köp två gånger
+    var seen = {};
+    var today = todayIso();
+    bank.rows = found.filter(function (r) {
+      var k = r.date + '|' + r.amount + '|' + merchantKey(r.store);
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    }).map(function (r) {
+      var dup = existingMatch(r);
+      return {
+        id: uid(),
+        store: r.store,
+        date: r.date || today,
+        noDate: !r.date,
+        amount: r.amount,
+        category: r.incoming ? '' : accountFor(r.store, r.category),
+        incoming: r.incoming,
+        dup: dup,
+        on: !r.incoming && !dup
+      };
+    });
+
+    $('bank-ocr-text').textContent = texts.join('\n\n---\n\n');
+    $('bank-ocr').hidden = false;
+    renderBankRows();
+    if (!bank.rows.length) {
+      setBankStatus('Hittade inga köp i bilden. Testa en skärmdump där listan med köp syns tydligt, eller lägg in köpen ett och ett.', true);
+      return;
+    }
+    $('bank-hint').hidden = false;
+    $('bank-tools').hidden = false;
+    fillSelect($('bank-all-cat'), false, '');
+    var missing = bank.rows.filter(function (r) { return r.on && !r.category; }).length;
+    var on = bank.rows.filter(function (r) { return r.on; }).length;
+    setBankStatus('Hittade ' + bank.rows.length + ' rader. ' + (!on
+      ? 'Alla verkar redan vara sparade eller är pengar in. Bocka i det du ändå vill spara.'
+      : missing
+      ? missing + ' av ' + on + ' markerade köp behöver ett konto.'
+      : 'Alla markerade köp har fått ett konto. Kontrollera och spara.'), false);
+  }
+
+  function renderBankRows() {
+    var list = $('bank-list');
+    if (!bank.rows.length) { list.innerHTML = ''; updateBankSave(); return; }
+    list.innerHTML = bank.rows.map(function (r, i) {
+      var flag = '';
+      if (r.incoming) flag = '<p class="bank-flag in">Pengar in. Inkomster lägger du under Budget, så den här sparas inte om du inte bockar i den.</p>';
+      else if (r.dup) flag = '<p class="bank-flag">Finns kanske redan: ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
+      else if (r.noDate) flag = '<p class="bank-flag">Datumet syntes inte i bilden, kontrollera det.</p>';
+      return '<li class="bank-row' + (r.on ? '' : ' off') + (r.on && !r.category ? ' need' : '') + '" data-i="' + i + '">' +
+        '<input class="bank-check" type="checkbox" data-f="on" aria-label="Spara ' + esc(r.store) + '"' + (r.on ? ' checked' : '') + '>' +
+        '<label class="b-store"><span class="sr">Butik</span><input type="text" data-f="store" value="' + esc(r.store) + '"></label>' +
+        '<label class="b-date"><span class="sr">Datum</span><input type="date" data-f="date" value="' + esc(r.date) + '"></label>' +
+        '<label class="b-amount"><span class="sr">Belopp i kronor</span><input type="number" inputmode="decimal" min="0" step="0.01" data-f="amount" value="' + r.amount.toFixed(2) + '"></label>' +
+        '<label class="b-cat"><span class="sr">Konto</span><select data-f="category"></select></label>' +
+        flag + '</li>';
+    }).join('');
+    Array.prototype.forEach.call(list.querySelectorAll('select[data-f="category"]'), function (sel, i) {
+      fillSelect(sel, false, bank.rows[i].category);
+    });
+    updateBankSave();
+  }
+
+  function updateBankSave() {
+    var on = bank.rows.filter(function (r) { return r.on; });
+    var ready = on.length && on.every(function (r) { return r.category && r.store.trim() && r.date && r.amount >= 0; });
+    var btn = $('bank-save');
+    btn.disabled = !ready;
+    btn.textContent = on.length ? 'Spara ' + on.length + ' köp' : 'Spara';
+    btn.title = on.length && !ready ? 'Välj konto för alla markerade köp' : '';
+  }
+
+  function bankInput(ev) {
+    var li = ev.target.closest('.bank-row');
+    var f = ev.target.dataset.f;
+    if (!li || !f) return;
+    var r = bank.rows[+li.dataset.i];
+    if (f === 'on') r.on = ev.target.checked;
+    else if (f === 'amount') r.amount = num(ev.target.value);
+    else r[f] = ev.target.value;
+    li.classList.toggle('off', !r.on);
+    li.classList.toggle('need', r.on && !r.category);
+    updateBankSave();
+  }
+
+  async function saveBank(ev) {
+    ev.preventDefault();
+    var rows = bank.rows.filter(function (r) { return r.on; });
+    if (!rows.length) return;
+    $('bank-save').disabled = true;
+    setBankStatus('Sparar…');
+    var saved = 0;
+    try {
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        await DB.put('receipts', {
+          id: uid(),
+          store: r.store.trim(),
+          date: r.date,
+          amount: Math.round(r.amount * 100) / 100,
+          category: r.category,
+          note: 'Från bankappen',
+          image: null,
+          createdAt: Date.now()
+        });
+        saved++;
+        var key = merchantKey(r.store);
+        if (key) bank.merchants[key] = r.category;
+      }
+      await DB.put('settings', { key: 'merchants', map: bank.merchants });
+    } catch (e) {
+      setBankStatus('Kunde inte spara alla köp (' + saved + ' av ' + rows.length + ' sparades). Försök igen.', true);
+      await loadReceipts();
+      await renderAll();
+      updateBankSave();
+      return;
+    }
+    await loadReceipts();
+    closeBankDialog();
+    // Visa månaden där de flesta köpen hamnade
+    var counts = {};
+    rows.forEach(function (x) { var m = x.date.slice(0, 7); counts[m] = (counts[m] || 0) + 1; });
+    var month = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+    if (month && $('f-period').value === 'month') state.month = month;
+    await renderAll();
+    showBanner(saved + (saved === 1 ? ' köp sparades' : ' köp sparades') + ' från bankappen.');
+  }
+
   /* ---------- Kvittodialog ---------- */
 
   // manual = köp utan kvitto (onlineköp, Swish, prenumeration …)
@@ -1778,6 +2041,25 @@
       var f = ev.target.files && ev.target.files[0];
       if (f) scanFile(f);
     });
+    $('bank-input').addEventListener('change', function (ev) {
+      var files = Array.prototype.slice.call(ev.target.files || []);
+      if (files.length) scanBank(files);
+    });
+    $('bank-list').addEventListener('input', bankInput);
+    $('bank-list').addEventListener('change', bankInput);
+    $('bank-all-cat').addEventListener('change', function (ev) {
+      var id = ev.target.value;
+      if (!id) return;
+      bank.rows.forEach(function (r) { if (r.on && !r.category) r.category = id; });
+      renderBankRows();
+      ev.target.value = '';
+    });
+    $('bank-form').addEventListener('submit', saveBank);
+    $('bank-close').addEventListener('click', closeBankDialog);
+    $('bank-cancel').addEventListener('click', closeBankDialog);
+    // Stängs dialogen (även med Esc) avbryts läsningen och samma bild kan väljas igen
+    $('bank-dialog').addEventListener('close', function () { bank.token++; $('bank-input').value = ''; });
+    $('fab-bank').addEventListener('click', function () { setFabMenu(false); });
     $('add-manual').addEventListener('click', function () { openDialog(null, true); });
     $('spent-manual').addEventListener('click', function () { openDialog(null, true); });
 

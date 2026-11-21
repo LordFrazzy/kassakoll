@@ -278,6 +278,7 @@
           <h2 class="h2">Lägg till köp</h2>
           <p class="hint">Har du ett kvitto: ta en bild så läser appen av butik, datum och summa. Kontrollera alltid beloppet innan du sparar.</p>
           <p class="hint">Inget kvitto, till exempel onlineköp, Swish eller prenumeration? Välj Utan kvitto och skriv in det själv.</p>
+          <p class="hint">Många köp på en gång? Ta en skärmdump av kontohändelserna i bankappen och välj Från bankappen. Du väljer bara konto och rättar det som blev fel.</p>
         </div>
         <div class="scan-actions">
           <label class="btn btn-primary btn-lg" for="file-input">
@@ -285,6 +286,11 @@
             Scanna kvitto
           </label>
           <input id="file-input" class="sr" type="file" accept="image/*">
+          <label class="btn btn-lg" for="bank-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>
+            Från bankappen
+          </label>
+          <input id="bank-input" class="sr" type="file" accept="image/*" multiple>
           <button class="btn btn-lg" id="add-manual" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>
             Utan kvitto
@@ -325,6 +331,10 @@
       <label class="fab-item" for="file-input" id="fab-scan">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
         Scanna kvitto
+      </label>
+      <label class="fab-item" for="bank-input" id="fab-bank">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>
+        Från bankappen
       </label>
       <button class="fab-item" type="button" id="fab-manual">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>
@@ -372,6 +382,34 @@
       <div class="dlg-foot">
         <button class="btn" type="button" id="dlg-cancel">Avbryt</button>
         <button class="btn btn-primary" type="submit" id="dlg-save">Spara kvitto</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="bank-dialog" class="bank-dialog" aria-labelledby="bank-title">
+    <form id="bank-form" method="dialog" autocomplete="off">
+      <div class="dlg-head">
+        <h2 id="bank-title" class="h2">Köp från bankappen</h2>
+        <button class="icon-btn" type="button" id="bank-close" aria-label="Stäng">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="bank-body">
+        <p class="scan-status" id="bank-status" role="status" hidden></p>
+        <p class="hint" id="bank-hint" hidden>Välj konto för varje köp och rätta det som blev fel. Bocka ur det du inte vill spara. Appen kommer ihåg vilket konto du valde för varje butik till nästa gång.</p>
+        <div class="bank-tools" id="bank-tools" hidden>
+          <label class="field bank-all"><span>Sätt konto på alla markerade utan konto</span><select id="bank-all-cat"></select></label>
+        </div>
+        <ul class="bank-list" id="bank-list"></ul>
+        <details class="ocr-details" id="bank-ocr" hidden>
+          <summary>Visa bilden och texten som lästes</summary>
+          <div class="bank-imgs" id="bank-imgs"></div>
+          <pre id="bank-ocr-text"></pre>
+        </details>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="bank-cancel">Avbryt</button>
+        <button class="btn btn-primary" type="submit" id="bank-save" disabled>Spara</button>
       </div>
     </form>
   </dialog>
