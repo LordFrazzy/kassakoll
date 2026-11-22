@@ -1146,6 +1146,7 @@
         var guess = state.accounts.filter(function (a) { return a.id === p.category || a.name.toLowerCase() === p.category.toLowerCase(); })[0];
         if (guess) $('r-cat').value = guess.id;
       }
+      checkMatch();
       var found = [p.store, p.date, p.amount != null].filter(Boolean).length;
       setStatus(found === 3
         ? 'Klart. Kontrollera uppgifterna innan du sparar.'
@@ -1193,7 +1194,7 @@
 
   function merchantKey(store) {
     return String(store || '').toLowerCase()
-      .replace(/^(k|c)\s?\*\s?/, '')
+      .replace(/^(k|c)\s?[*"'”]\s?/, '')
       .replace(/[^a-zåäö]+/g, ' ').trim().split(' ').slice(0, 3).join(' '); // tre ord: "swish till kim" ≠ "swish till alva"
   }
 
@@ -1215,12 +1216,50 @@
   }
 
   // Ett köp med samma belopp några dagar ifrån (kortköp bokförs ofta 1–3 dagar efter kvittot) finns troligen redan
-  function existingMatch(row) {
-    if (!row.date) return null;
-    var t = new Date(row.date + 'T12:00').getTime();
-    return state.receipts.filter(function (r) {
-      return Math.abs(r.amount - row.amount) < 0.01 && Math.abs(new Date(r.date + 'T12:00').getTime() - t) <= 86400000 * 3;
-    })[0] || null;
+  /* Samma köp kan komma in två gånger: först som kvitto, sedan från bankappen (eller tvärtom).
+     Banken skriver ofta butiken annorlunda ("K*WILLYS GBG" mot "Willys Hemma") och bokför kortköp
+     några dagar senare, så belopp, datum och namn vägs ihop. */
+  var STORE_STOP = { till: 1, fran: 1, från: 1, the: 1, och: 1, kortkop: 1, kortköp: 1, sweden: 1, sverige: 1, butik: 1, center: 1, centrum: 1 };
+  function storeWords(s) {
+    return String(s || '').toLowerCase().replace(/^(k|c)\s?[*"'”]\s?/, '').replace(/[^a-zåäö0-9]+/g, ' ').trim().split(' ')
+      .filter(function (w) { return w.length >= 3 && !STORE_STOP[w] && !/^\d+$/.test(w); });
+  }
+  function sameStore(a, b) {
+    var wa = storeWords(a), wb = storeWords(b);
+    if (!wa.length || !wb.length) return false;
+    // Swish till Kim och Swish till Alva är inte samma
+    if (wa[0] === 'swish' || wb[0] === 'swish') return wa.join(' ') === wb.join(' ');
+    return wa.some(function (x) {
+      return wb.some(function (y) { return x === y || (x.length >= 4 && y.length >= 4 && (x.indexOf(y) === 0 || y.indexOf(x) === 0)); });
+    });
+  }
+  function daysApart(a, b) {
+    return Math.abs(new Date(a + 'T12:00').getTime() - new Date(b + 'T12:00').getTime()) / 86400000;
+  }
+  // Poäng för hur troligt det är att två köp är samma. 0 = inte samma.
+  function matchScore(a, b) {
+    if (!a.date || !b.date) return 0;
+    var diff = Math.abs(a.amount - b.amount);
+    var days = daysApart(a.date, b.date);
+    var named = sameStore(a.store, b.store);
+    if (diff < 0.01) {
+      if (named && days <= 10) return 100 - days;
+      if (days <= 4) return 60 - days * 5;
+      return 0;
+    }
+    // Avrundat eller felläst belopp på kvittot: kräver samma butik och nära datum
+    if (named && days <= 4 && (diff <= 1 || diff <= a.amount * 0.02)) return 40 - days * 5 - diff;
+    return 0;
+  }
+  // Bästa matchningen bland sparade köp som inte redan är parade med något annat
+  function findMatch(row, pool, used, skipId) {
+    var best = null, bestScore = 0;
+    pool.forEach(function (r) {
+      if (r.id === skipId || (used && used[r.id])) return;
+      var s = matchScore(row, r);
+      if (s > bestScore) { best = r; bestScore = s; }
+    });
+    return best;
   }
 
   function setBankStatus(msg, warn) {
@@ -1298,8 +1337,12 @@
       if (seen[k]) return false;
       seen[k] = true;
       return true;
-    }).map(function (r) {
-      var dup = existingMatch(r);
+    });
+    // Varje sparat köp kan bara vara dubblett till en rad (två köp på 59 kr samma vecka är två köp)
+    var used = {};
+    bank.rows = bank.rows.map(function (r) {
+      var dup = r.incoming ? null : findMatch(r, state.receipts, used);
+      if (dup) used[dup.id] = true;
       return {
         id: uid(),
         store: r.store,
@@ -1338,7 +1381,7 @@
     list.innerHTML = bank.rows.map(function (r, i) {
       var flag = '';
       if (r.incoming) flag = '<p class="bank-flag in">Pengar in. Inkomster lägger du under Budget, så den här sparas inte om du inte bockar i den.</p>';
-      else if (r.dup) flag = '<p class="bank-flag">Finns kanske redan: ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
+      else if (r.dup) flag = '<p class="bank-flag">Finns redan' + (r.dup.image ? ' som kvitto' : '') + ': ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
       else if (r.noDate) flag = '<p class="bank-flag">Datumet syntes inte i bilden, kontrollera det.</p>';
       return '<li class="bank-row' + (r.on ? '' : ' off') + (r.on && !r.category ? ' need' : '') + '" data-i="' + i + '">' +
         '<input class="bank-check" type="checkbox" data-f="on" aria-label="Spara ' + esc(r.store) + '"' + (r.on ? ' checked' : '') + '>' +
@@ -1425,6 +1468,10 @@
   function openDialog(receipt, manual) {
     state.scanToken++;
     state.editing = receipt;
+    state.match = null;
+    state.mergeInto = null;
+    state.matchDismissed = {};
+    $('match-box').hidden = true;
     state.draftImage = receipt ? receipt.image || null : null;
     var noReceipt = receipt ? !receipt.image : !!manual;
     $('dlg-title').textContent = receipt ? (noReceipt ? 'Ändra köp' : 'Ändra kvitto') : (noReceipt ? 'Köp utan kvitto' : 'Nytt kvitto');
@@ -1455,6 +1502,26 @@
     $('file-input').value = '';
   }
 
+  /* Nytt kvitto som redan finns sparat (oftast från bankappen): fråga om det ska kopplas ihop i stället för att bli dubbelt */
+  function dialogMatch() {
+    if (state.editing) return null;
+    var row = { store: $('r-store').value.trim(), date: $('r-date').value, amount: num($('r-amount').value) };
+    if (!row.date || !(row.amount > 0)) return null;
+    var m = findMatch(row, state.receipts, state.matchDismissed);
+    return m;
+  }
+
+  function checkMatch() {
+    var m = dialogMatch();
+    state.match = m;
+    $('match-box').hidden = !m;
+    if (!m) return;
+    if (!$('r-cat').value && accById(m.category)) $('r-cat').value = m.category;
+    var from = m.note === 'Från bankappen' ? 'från bankappen' : m.image ? 'som kvitto' : 'sedan tidigare';
+    $('match-text').textContent = 'Det här köpet verkar redan finnas ' + from + ': ' + m.store + ', ' + dateLabel(m.date) + ', ' +
+      kr2(m.amount) + '. Är det samma köp? Då kopplas kvittot ihop med det i stället för att räknas två gånger.';
+  }
+
   async function saveReceipt(ev) {
     ev.preventDefault();
     var date = $('r-date').value;
@@ -1462,15 +1529,29 @@
     var store = $('r-store').value.trim();
     var cat = $('r-cat').value;
     if (!store || !date || !cat || !(amount >= 0)) return;
+    // Obesvarad fråga om samma köp: svara först
+    checkMatch();
+    if (state.match && !state.mergeInto) {
+      var box = $('match-box');
+      box.classList.remove('nudge');
+      void box.offsetWidth;
+      box.classList.add('nudge');
+      $('match-merge').focus();
+      return;
+    }
+    var into = state.mergeInto;
+    var note = $('r-note').value.trim();
+    if (into && !note && into.note && into.note !== 'Från bankappen') note = into.note;
     var rec = {
-      id: state.editing ? state.editing.id : uid(),
+      // Ihopkopplat: behåll det sparade köpet men med kvittots uppgifter och bild
+      id: into ? into.id : state.editing ? state.editing.id : uid(),
       store: store,
       date: date,
       amount: Math.round(amount * 100) / 100,
       category: cat,
-      note: $('r-note').value.trim(),
-      image: state.draftImage || null,
-      createdAt: state.editing ? state.editing.createdAt : Date.now()
+      note: note,
+      image: state.draftImage || (into ? into.image : null) || null,
+      createdAt: into ? into.createdAt : state.editing ? state.editing.createdAt : Date.now()
     };
     try {
       await DB.put('receipts', rec);
@@ -1483,6 +1564,7 @@
     var m = date.slice(0, 7);
     if (m !== state.month && $('f-period').value === 'month') state.month = m;
     await renderAll();
+    if (into) showBanner('Kvittot kopplades ihop med ' + into.store + ' (' + kr2(into.amount) + '). Köpet räknas bara en gång.');
   }
 
   /* ---------- Sidans flöde ---------- */
@@ -2099,6 +2181,19 @@
       $('r-image').value = '';
     });
     $('receipt-form').addEventListener('submit', saveReceipt);
+    // Kolla om köpet redan finns när belopp, datum eller butik ändras
+    ['r-store', 'r-date', 'r-amount'].forEach(function (id) {
+      $(id).addEventListener('change', function () { state.mergeInto = null; checkMatch(); });
+    });
+    $('match-merge').addEventListener('click', function () {
+      state.mergeInto = state.match;
+      $('receipt-form').requestSubmit();
+    });
+    $('match-new').addEventListener('click', function () {
+      if (state.match) state.matchDismissed[state.match.id] = true;
+      checkMatch(); // kan finnas ett annat köp som passar
+      $('dlg-save').focus();
+    });
     $('dlg-close').addEventListener('click', closeDialog);
     $('dlg-cancel').addEventListener('click', closeDialog);
     $('receipt-dialog').addEventListener('cancel', function () { state.scanToken++; });

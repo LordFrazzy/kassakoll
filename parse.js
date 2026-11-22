@@ -352,7 +352,7 @@
       .replace(/\b\d{6}\b/g, ' ')
       .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
       .replace(/\b(?=[A-Za-z]*\d[A-Za-z]*\d)(?=\w*[A-Za-z])[A-Za-z0-9]{5,}\b/g, ' ') // referenskoder som P3E4F1
-      .replace(/^[KkCc]\s?\*\s?/, '')
+      .replace(/^[KkCc]\s?[*"'”]\s?/, '') // "K*WILLYS", OCR läser ofta * som "
       .replace(BANK_NOISE, ' ')
       .replace(/[*#|_=~<>«»©®°•·…]+/g, ' ')
       .replace(/\b\d{3,}\b/g, ' ')

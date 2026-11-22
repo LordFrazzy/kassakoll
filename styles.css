@@ -380,6 +380,14 @@ dialog::backdrop { background: rgba(10, 14, 12, 0.55); backdrop-filter: blur(3px
 .scan-status { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 0.9rem; font-weight: 600; }
 .scan-status.warn { background: transparent; border: 1px solid var(--warn); color: var(--warn); }
 
+/* Samma köp finns redan (kvitto + bankappen) */
+.match-box { display: grid; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.match-box p { margin: 0; font-size: 0.9rem; font-weight: 600; }
+.match-box.nudge { animation: nudge 0.35s ease; }
+@keyframes nudge { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+.match-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.match-actions .btn { padding: 8px 14px; }
+
 /* Köp från bankappen */
 .bank-dialog { width: min(760px, calc(100vw - 24px)); }
 .bank-dialog[open] { display: flex; flex-direction: column; }

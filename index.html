@@ -377,6 +377,13 @@
           </div>
           <label class="field"><span>Konto</span><select id="r-cat" required></select></label>
           <label class="field"><span>Anteckning</span><input id="r-note" type="text" placeholder="Valfritt"></label>
+          <div class="match-box" id="match-box" hidden>
+            <p id="match-text"></p>
+            <div class="match-actions">
+              <button class="btn btn-primary" type="button" id="match-merge">Ja, koppla ihop</button>
+              <button class="btn" type="button" id="match-new">Nej, annat köp</button>
+            </div>
+          </div>
           <details class="ocr-details" id="ocr-details" hidden>
             <summary>Visa texten som lästes</summary>
             <pre id="ocr-text"></pre>
