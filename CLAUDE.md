@@ -53,6 +53,9 @@ drawPace() = spenderat dag för dag mot jämn takt, drawMonths() = 6 månader st
 Skärmdump(ar) av kontohändelser -> scanBank() i app.js: prepareScreenshot() (förstorar, vänder mörkt läge, färgad text blir mörk),
 Tesseract psm 6 (psm 4 om få rader), KvittoParse.parseBank() i parse.js ger rader {store, date, amount, incoming, category}.
 Datumrubriker ("Idag", "Igår", "Fre 20 nov") gäller raderna under. Andra belopp på en rad = saldo, ignoreras.
+Användarens bank: namn + belopp på en rad, sifferdatum (2026-11-21, ev. med saldo) på raden UNDER -> dateBelow i parseBank.
+Minus läses också som ~ = —. Visar bilden ören (showsOre) blir heltal utan "kr" ören som tappat kommat ("-24550" = 245,50, flaggas).
+Dubbletter mellan överlappande bilder tas bort, men likadana köp i samma bild behålls (två bussbiljetter samma dag).
 Granskning i #bank-dialog: pengar in och troliga dubbletter är urbockade.
 Dubbletter: matchScore()/findMatch() i app.js väger belopp, datum och butiksnamn (sameStore: gemensamt ord,
 Swish kräver exakt samma mottagare). Samma belopp + samma butik inom 10 dagar, eller samma belopp inom 4 dagar.

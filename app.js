@@ -1321,7 +1321,7 @@
         }
         if (token !== bank.token) return;
         texts.push(text.trim());
-        found = found.concat(rows);
+        found.push(rows);
       } catch (e) {
         texts.push('(Bild ' + (f + 1) + ' kunde inte läsas)');
       }
@@ -1329,14 +1329,20 @@
     ocrProgress = null;
     if (token !== bank.token) return;
 
-    // Överlappande skärmdumpar ger samma köp två gånger
-    var seen = {};
+    // Överlappande skärmdumpar visar samma köp två gånger. Men två likadana köp i SAMMA bild
+    // (två bussbiljetter samma dag) är två köp: behåll så många som den bild som har flest.
+    var keyOf = function (r) { return r.date + '|' + r.amount + '|' + merchantKey(r.store); };
+    var most = {};
+    found.forEach(function (rows) {
+      var n = {};
+      rows.forEach(function (r) { var k = keyOf(r); n[k] = (n[k] || 0) + 1; most[k] = Math.max(most[k] || 0, n[k]); });
+    });
+    var taken = {};
     var today = todayIso();
-    bank.rows = found.filter(function (r) {
-      var k = r.date + '|' + r.amount + '|' + merchantKey(r.store);
-      if (seen[k]) return false;
-      seen[k] = true;
-      return true;
+    bank.rows = [].concat.apply([], found).filter(function (r) {
+      var k = keyOf(r);
+      taken[k] = (taken[k] || 0) + 1;
+      return taken[k] <= most[k];
     });
     // Varje sparat köp kan bara vara dubblett till en rad (två köp på 59 kr samma vecka är två köp)
     var used = {};
@@ -1348,6 +1354,7 @@
         store: r.store,
         date: r.date || today,
         noDate: !r.date,
+        amountGuessed: r.amountGuessed,
         amount: r.amount,
         category: r.incoming ? '' : accountFor(r.store, r.category),
         incoming: r.incoming,
@@ -1383,6 +1390,7 @@
       if (r.incoming) flag = '<p class="bank-flag in">Pengar in. Inkomster lägger du under Budget, så den här sparas inte om du inte bockar i den.</p>';
       else if (r.dup) flag = '<p class="bank-flag">Finns redan' + (r.dup.image ? ' som kvitto' : '') + ': ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
       else if (r.noDate) flag = '<p class="bank-flag">Datumet syntes inte i bilden, kontrollera det.</p>';
+      else if (r.amountGuessed) flag = '<p class="bank-flag">Kommat syntes inte i beloppet. Kontrollera att det stämmer.</p>';
       return '<li class="bank-row' + (r.on ? '' : ' off') + (r.on && !r.category ? ' need' : '') + '" data-i="' + i + '">' +
         '<input class="bank-check" type="checkbox" data-f="on" aria-label="Spara ' + esc(r.store) + '"' + (r.on ? ' checked' : '') + '>' +
         '<label class="b-store"><span class="sr">Butik</span><input type="text" data-f="store" value="' + esc(r.store) + '"></label>' +

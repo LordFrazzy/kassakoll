@@ -280,7 +280,8 @@
   /* ---------- Bankutdrag (skärmdump från bankappen) ---------- */
 
   // Ett belopp på en bankrad: "-245,50", "−1 245,50 kr", "-SEK 245.50", "-245 kr", "245,50"
-  var BANK_AMOUNT_RE = /([-−–+])?\s?(?:(?:SEK|kr)\s?)?(\d{1,3}(?:[  .]\d{3})+|\d+)(?:\s?[.,]\s?(\d{2}))?(?!\d)(\s?(?:kr|SEK)\b)?/gi;
+  // OCR läser ofta minustecknet som ~, = eller ett långt streck
+  var BANK_AMOUNT_RE = /([-−–—~=+])?\s?(?:(?:SEK|kr)\s?)?(\d{1,3}(?:[  .]\d{3})+|\d+)(?:\s?[.,]\s?(\d{2}))?(?!\d)(\s?(?:kr|SEK)\b)?/gi;
   var WEEKDAYS = /^([il1|]\s?dag|[il1|]\s?går|today|yesterday|mån|tis|ons|tors?|fre|lör|sön)(dag)?\.?(?![a-zåäö])/i;
 
   // Byter datum och klockslag mot mellanslag (samma längd, så att positionerna stämmer)
@@ -293,7 +294,8 @@
       .replace(/\b\d{1,2}\.?\s(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)/gi, blank);
   }
 
-  function bankAmounts(line) {
+  // oreMode: banken visar alltid ören, så ett heltal utan "kr" är ett belopp där OCR tappade kommat ("-24550" = 245,50)
+  function bankAmounts(line, oreMode) {
     var out = [];
     var m;
     var src = maskDates(line);
@@ -304,13 +306,30 @@
       var hasKr = !!m[4] || /SEK|kr/i.test(m[0].slice(0, 6));
       // Heltal räknas bara som belopp med minustecken eller "kr" (annars är det t.ex. ett datum eller kortnummer)
       if (!hasDec && !hasSign && !hasKr) continue;
-      if (!hasDec && /^\d{5,}$/.test(m[2])) continue;
-      var n = parseFloat(m[2].replace(/[\s .]/g, '') + (hasDec ? '.' + m[3] : ''));
+      var digits = m[2].replace(/[\s .]/g, '');
+      var guessed = false;
+      var n;
+      if (hasDec) n = parseFloat(digits + '.' + m[3]);
+      else if (oreMode && !hasKr && digits.length >= 3) { n = parseFloat(digits) / 100; guessed = true; }
+      else if (/^\d{5,}$/.test(m[2])) continue;
+      else n = parseFloat(digits);
       if (!isFinite(n) || n <= 0 || n >= 1000000) continue;
-      out.push({ value: n, negative: hasSign, plus: m[1] === '+', index: m.index, text: m[0] });
+      out.push({ value: n, negative: hasSign, plus: m[1] === '+', index: m.index, text: m[0], hasDec: hasDec, hasKr: hasKr, guessed: guessed });
     }
     return out;
   }
+
+  // Visar banken ören på beloppen? (minst ett belopp med decimaler och inga heltal med "kr")
+  function showsOre(lines) {
+    var dec = 0, krInt = 0;
+    lines.forEach(function (l) {
+      bankAmounts(l, false).forEach(function (a) { if (a.hasDec) dec++; else if (a.hasKr) krInt++; });
+    });
+    return dec > 0 && krInt === 0;
+  }
+
+  // Datum skrivet med siffror (2026-11-19, 19.11.2026), inte en rubrik som "Igår" eller "18 november"
+  var NUMERIC_DATE = /\b(20\d{2}\s?-?\s?\d{2}\s?-?\s?\d{2}|\d{1,2}[./]\d{1,2}[./]20\d{2})\b/;
 
   // Datum på en rad eller som rubrik. Utan årtal väljs det år som gör att datumet inte ligger i framtiden.
   function bankDate(line, now) {
@@ -376,19 +395,40 @@
     var currentDate = null;
     var pendingName = null; // namn på en rad utan belopp, beloppet kan stå på raden under
     var anyNegative = false;
+    var oreMode = showsOre(lines);
+    // Vissa banker skriver datumet på raden UNDER köpet ("ICA -245,50" / "2026-11-21").
+    // dateBelow slås på första gången ett sifferdatum direkt följer ett köp som saknar datum.
+    var dateBelow = false;
+    var lastRowLine = -2;
 
-    lines.forEach(function (line) {
-      var amounts = bankAmounts(line);
+    function attachDate(date, line, i) {
+      var last = rows[rows.length - 1];
+      if (!last || lastRowLine !== i - 1 || last.ownDate || !NUMERIC_DATE.test(line)) return false;
+      if (!dateBelow && last.date) return false;
+      last.date = date;
+      last.ownDate = true;
+      dateBelow = true;
+      return true;
+    }
+
+    lines.forEach(function (line, i) {
+      var amounts = bankAmounts(line, oreMode);
       var letters = letterCount(line);
       var date = bankDate(line, now);
 
       if (!amounts.length) {
-        // Rubrik med datum ("Idag", "Måndag 18 nov", "18 november 2026")
         var rest = cleanMerchant(line.replace(WEEKDAYS, ' '));
-        if (date && letterCount(rest) < 3) { currentDate = date; pendingName = null; return; }
+        if (date && letterCount(rest) < 3) {
+          if (attachDate(date, line, i)) return;
+          // Rubrik med datum ("Idag", "Måndag 18 nov", "18 november 2026") gäller köpen under
+          currentDate = date; pendingName = null; return;
+        }
         if (date && WEEKDAYS.test(line)) { currentDate = date; pendingName = null; return; }
         // Kategori- eller statusrad under ett köp ("Kortköp", "Reserverat") hör till raden ovan
-        if (/^(kortköp|kortkop|reserverat|swish|autogiro|e-faktura|överföring|insättning|lön|prel)/i.test(line) && rows.length && !pendingName) return;
+        if (/^(kortköp|kortkop|reserverat|swish|autogiro|e-faktura|överföring|insättning|lön|prel)/i.test(line) && rows.length && !pendingName) {
+          if (lastRowLine === i - 1) lastRowLine = i;
+          return;
+        }
         if (letters >= 3) pendingName = { text: line, date: date };
         return;
       }
@@ -403,6 +443,8 @@
         if (!date) date = pendingName.date;
       }
       pendingName = null;
+      // Datumrad med belopp under ett köp ("2026-11-21  12 345,67"): datumet hör till köpet, beloppet är saldot
+      if (letterCount(store) < 2 && date && attachDate(date, line, i)) return;
       if (letterCount(store) < 2) return; // t.ex. "Saldo 12 345,67" utan text kvar, eller skräp
       if (/^(saldo|disponibelt|tillgängligt|totalt|summa|kontosaldo|beviljad kredit)\b/i.test(store)) return;
       if (a.negative) anyNegative = true;
@@ -415,19 +457,22 @@
       if (!category) category = guessCategory(null, store);
       rows.push({
         store: store,
-        date: date || currentDate,
+        date: date || (dateBelow ? null : currentDate),
+        ownDate: !!date,
         amount: Math.round(a.value * 100) / 100,
+        amountGuessed: a.guessed,
         negative: a.negative,
         plus: a.plus,
         category: category,
         raw: line
       });
+      lastRowLine = i;
     });
 
     // Har banken minustecken på köpen är rader utan minus pengar in (lön, Swish till dig)
     rows.forEach(function (r) {
       r.incoming = r.plus || (anyNegative && !r.negative) || /^(lön|insättning|swish från|återbetalning)/i.test(r.store);
-      delete r.negative; delete r.plus;
+      delete r.negative; delete r.plus; delete r.ownDate;
     });
     return rows;
   }
