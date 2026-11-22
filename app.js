@@ -1,6 +1,9 @@
 (function () {
   'use strict';
 
+  // Versionen som visas längst ner på sidan (och i bankrutan). Höj vid varje publicering: 1.0 -> 1.1 -> 1.2 …
+  var APP_VERSION = '1.0';
+
   // Standardkonton. Id = namnet så att äldre kvitton (category: 'Mat') och planer fortsätter fungera.
   var DEFAULT_ACCOUNTS = ['Mat', 'Transport', 'Fritid', 'Kläder', 'Nöje', 'Hälsa', 'Boende', 'Skola', 'Övrigt'];
   var COLORS = 9;
@@ -2290,7 +2293,7 @@
       });
       var appScript = document.querySelector('script[src*="app.js"]');
       var version = appScript && (appScript.src.match(/v=(\w+)/) || [])[1];
-      var text = 'Kassakoll ' + (version || '(okänd version)') + ', lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +
+      var text = 'Kassakoll v' + APP_VERSION + ' (' + (version || '?') + '), lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +
         '\n\n' + (bank.debug || []).join('\n') + '\nSkärm: ' + screen.width + '×' + screen.height + ' · ' + navigator.userAgent +
         '\n\nTexten som lästes:\n' + $('bank-ocr-text').textContent;
       try {
@@ -2591,6 +2594,9 @@
   }
 
   async function init() {
+    Array.prototype.forEach.call(document.querySelectorAll('.app-version-text'), function (el) {
+      el.textContent = 'Kassakoll v' + APP_VERSION;
+    });
     bind();
     $('login-btn').addEventListener('click', askLogin);
     var saved = null;

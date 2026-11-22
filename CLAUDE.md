@@ -78,8 +78,11 @@ paras bara med en rad. Nytt kvitto som matchar ett sparat köp: #match-box fråg
 note "Från bankappen". Valt konto per butik minns i settings/merchants (map: merchantKey -> konto-id).
 
 ## Publicera
-index.html laddar filerna med ?v=ÅÅÅÅMMDDTTMM. Byt numret vid varje publicering (sed på "?v=") så att mobiler inte kör
-gamla filer (GitHub Pages cachar i 10 min). Bankdialogens "Kopiera texten" visar version, bildstorlek och läsläge.
+Vid varje publicering:
+1. Höj APP_VERSION överst i app.js (1.0 -> 1.1 …). Visas som "Kassakoll v1.x" längst ner på sidan och i bankrutan,
+   så att användaren kan se vilken version telefonen kör.
+2. Byt ?v=ÅÅÅÅMMDDTTMM i index.html (sed på "?v=") så att mobiler inte kör gamla filer (GitHub Pages cachar i 10 min).
+Bankdialogens "Kopiera texten" visar version, bildstorlek och läsläge.
 
 ## Menyn
 Flikarna har adresser: #budget, #spenderat, #kvitton, #saldo (ROUTES i app.js). navigate() sätter hash, hashchange byter vy.

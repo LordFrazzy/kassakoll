@@ -388,6 +388,10 @@ dialog::backdrop { background: rgba(10, 14, 12, 0.55); backdrop-filter: blur(3px
 .match-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .match-actions .btn { padding: 8px 14px; }
 
+/* Versionsnummer längst ner */
+.app-version { margin: 28px 0 8px; text-align: center; font-size: 0.75rem; color: var(--muted); opacity: 0.8; }
+.dlg-version { margin: 4px 0 0; }
+
 /* Köp från bankappen */
 .bank-dialog { width: min(760px, calc(100vw - 24px)); }
 /* Höjden sätts med flex "auto" (inte flex: 1): Safari på iPhone gör annars formuläret 0 px högt och rutan osynlig */
