@@ -1375,7 +1375,7 @@
     fillSelect($('bank-all-cat'), false, '');
     var missing = bank.rows.filter(function (r) { return r.on && !r.category; }).length;
     var on = bank.rows.filter(function (r) { return r.on; }).length;
-    setBankStatus('Hittade ' + bank.rows.length + ' rader. ' + (!on
+    setBankStatus('Hittade ' + bank.rows.length + (bank.rows.length === 1 ? ' rad. ' : ' rader. ') + (!on
       ? 'Alla verkar redan vara sparade eller är pengar in. Bocka i det du ändå vill spara.'
       : missing
       ? missing + ' av ' + on + ' markerade köp behöver ett konto.'
@@ -2127,14 +2127,20 @@
       renderBudget();
     });
 
-    $('file-input').addEventListener('change', function (ev) {
-      var f = ev.target.files && ev.target.files[0];
-      if (f) scanFile(f);
-    });
-    $('bank-input').addEventListener('change', function (ev) {
-      var files = Array.prototype.slice.call(ev.target.files || []);
-      if (files.length) scanBank(files);
-    });
+    // Vissa mobiler skickar "input", andra "change" när en bild valts. Filerna kopieras och väljaren töms direkt,
+    // så att samma händelse inte körs två gånger och samma bild kan väljas igen.
+    function onFiles(input, handle) {
+      function picked() {
+        var files = Array.prototype.slice.call(input.files || []);
+        if (!files.length) return;
+        input.value = '';
+        handle(files);
+      }
+      input.addEventListener('change', picked);
+      input.addEventListener('input', picked);
+    }
+    onFiles($('file-input'), function (files) { scanFile(files[0]); });
+    onFiles($('bank-input'), scanBank);
     $('bank-list').addEventListener('input', bankInput);
     $('bank-list').addEventListener('change', bankInput);
     $('bank-all-cat').addEventListener('change', function (ev) {
@@ -2149,7 +2155,8 @@
     $('bank-cancel').addEventListener('click', closeBankDialog);
     // Stängs dialogen (även med Esc) avbryts läsningen och samma bild kan väljas igen
     $('bank-dialog').addEventListener('close', function () { bank.token++; $('bank-input').value = ''; });
-    $('fab-bank').addEventListener('click', function () { setFabMenu(false); });
+    // Stäng menyn först efter klicket: döljs knappen mitt i klicket öppnar inte alla mobiler bildväljaren
+    $('fab-bank').addEventListener('click', function () { setTimeout(function () { setFabMenu(false); }, 300); });
     $('add-manual').addEventListener('click', function () { openDialog(null, true); });
     $('spent-manual').addEventListener('click', function () { openDialog(null, true); });
 
@@ -2162,10 +2169,11 @@
       ev.stopPropagation();
       setFabMenu($('fab-menu').hidden);
     });
-    $('fab-scan').addEventListener('click', function () { setFabMenu(false); });
+    $('fab-scan').addEventListener('click', function () { setTimeout(function () { setFabMenu(false); }, 300); });
     $('fab-manual').addEventListener('click', function () { setFabMenu(false); openDialog(null, true); });
     document.addEventListener('click', function (ev) {
-      if (!$('fab-menu').hidden && !ev.target.closest('.fab-wrap')) setFabMenu(false);
+      // Klicket som etiketten skickar vidare till filväljaren räknas inte som ett klick utanför menyn
+      if (!$('fab-menu').hidden && !ev.target.closest('.fab-wrap') && ev.target.type !== 'file') setFabMenu(false);
     });
     document.addEventListener('keydown', function (ev) {
       if (ev.key === 'Escape' && !$('fab-menu').hidden) { setFabMenu(false); $('fab').focus(); }

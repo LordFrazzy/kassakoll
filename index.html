@@ -294,12 +294,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
             Scanna kvitto
           </label>
-          <input id="file-input" class="sr" type="file" accept="image/*">
           <label class="btn btn-lg" for="bank-input">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>
             Från bankappen
           </label>
-          <input id="bank-input" class="sr" type="file" accept="image/*" multiple>
           <button class="btn btn-lg" id="add-manual" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>
             Utan kvitto
@@ -436,6 +434,10 @@
     </button>
     <img id="big-img" alt="Kvitto">
   </dialog>
+
+  <!-- Filväljarna ligger utanför flikarna så att de alltid finns på sidan (iPhone tappar annars bilden när fliken är dold) -->
+  <input id="file-input" class="sr" type="file" accept="image/*" tabindex="-1">
+  <input id="bank-input" class="sr" type="file" accept="image/*" multiple tabindex="-1">
 
   <script src="config.js"></script>
   <script src="parse.js"></script>
