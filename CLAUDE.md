@@ -59,8 +59,12 @@ Dubbletter mellan överlappande bilder tas bort, men likadana köp i samma bild 
 Statusord ("Prel", "Swish", "Kortköp") slängs bara som egen rad; i början av ett namn är de en del av köpet.
 Heltal sist på raden räknas som ören om banken visar ören (OCR tappar både minus och komma). Saknas minus på
 många rader litar vi inte på tecknet (bara + och "Lön" m.fl. = pengar in).
-ocrScreenshot() i app.js tar bort korta ord med låg säkerhet (ikoner); stripAvatar() i parse.js tar bort bokstavsikonen
-("H Hemköp"). Andra läsningen (psm 4) körs om < 3 köp eller färre köp än sifferdatum i texten.
+ocrScreenshot() i app.js läser med psm 11 (gles text) och bygger raderna själv av ordens position (mittpunkt inom halva
+radhöjden = samma rad), eftersom användarens bank har beloppet mitt emellan namn- och datumraden; då blandar Tesseracts
+egen radindelning ihop allt. Korta ord med låg säkerhet (ikoner) tas bort; stripAvatar() i parse.js tar bort bokstavsikonen
+("H Hemköp"). Andra läsningen (psm 6) körs om < 3 köp eller färre köp än sifferdatum i texten.
+Belopp med punkt ("-94.00") får inte tas för datum: maskDates() tar bara giltiga dag/månad och inte efter minustecken.
+Heltal utan minus räknas som belopp bara när OCR tappar kommat oftare än det läser det (läge 2), så "McDonalds 7520" är ett namn.
 Granskning i #bank-dialog: pengar in och troliga dubbletter är urbockade.
 Dubbletter: matchScore()/findMatch() i app.js väger belopp, datum och butiksnamn (sameStore: gemensamt ord,
 Swish kräver exakt samma mottagare). Samma belopp + samma butik inom 10 dagar, eller samma belopp inom 4 dagar.

@@ -290,7 +290,12 @@
     return line
       .replace(/\b\d{2,4}[-./]\d{1,2}[-./]\d{1,4}\b/g, blank)
       .replace(/\b20\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/g, blank) // 20261121
-      .replace(/\b\d{1,2}[/.]\d{1,2}\b(?![.,]\d)/g, blank)
+      // "18/11" eller "18.11" är ett datum, men inte "-94.00" eller "12.50 kr" (belopp med punkt) eller "94.00" (dag > 31)
+      .replace(/(^|[^\d\-−–—~=+.,])(\d{1,2})([/.])(\d{1,2})\b(?![.,]\d)(?!\s?(?:kr|SEK)\b)/gi, function (all, pre, d, sep, mo) {
+        if (+d < 1 || +d > 31 || +mo < 1 || +mo > 12) return all;
+        if (sep === '.' && mo.length === 2 && /^\s*[-−–—~=]\s?$/.test(pre)) return all;
+        return pre + blank(d + sep + mo);
+      })
       .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, blank)
       .replace(/\b\d{1,2}\.?\s(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)[a-zåäö]*\.?(?:\s+20\d{2}\b)?/gi, blank);
   }
@@ -299,7 +304,11 @@
   function bankAmounts(line, oreMode) {
     var out = [];
     var m;
-    var src = maskDates(line);
+    // OCR sätter ibland ett mellanslag mitt i beloppet: "- 1 0,00" = 10,00. Mellanslaget flyttas först (samma längd).
+    // Bara 1–2 siffror efter mellanslaget, så att tusental som "12 345,67" inte påverkas.
+    var src = maskDates(line).replace(/(^|[^\d])(\d{1,2}) (\d{1,2}[.,]\d{2})(?!\d)/g, function (all, pre, a, b) {
+      return pre + ' ' + a + b;
+    });
     var end = src.replace(/\s+$/, '').length;
     BANK_AMOUNT_RE.lastIndex = 0;
     while ((m = BANK_AMOUNT_RE.exec(src))) {
@@ -308,7 +317,7 @@
       var hasKr = !!m[4] || /SEK|kr/i.test(m[0].slice(0, 6));
       var digits = m[2].replace(/[\s .]/g, '');
       // Sist på raden i en bank som visar ören: ett belopp där OCR tappade både minus och komma ("SPOTIFY 11900")
-      var bareAtEnd = oreMode && !hasDec && !hasKr && digits.length >= 3 && m.index + m[0].length === end;
+      var bareAtEnd = oreMode === 2 && !hasDec && !hasKr && digits.length >= 3 && m.index + m[0].length === end;
       // Annars räknas heltal bara som belopp med minustecken eller "kr" (inte t.ex. ett datum eller kortnummer)
       if (!hasDec && !hasSign && !hasKr && !bareAtEnd) continue;
       var guessed = false;
@@ -323,15 +332,17 @@
     return out;
   }
 
-  // Visar banken ören på beloppen? Inga heltal med "kr", och antingen belopp med decimaler
-  // eller flera rader som slutar på ett tal med minst tre siffror (där OCR tappat kommat)
+  // Visar banken ören på beloppen? 0 = nej (heltal med "kr" finns), 1 = ja: heltal MED minustecken är belopp
+  // som tappat kommat, 2 = ja, och OCR tappar kommat så ofta att även heltal sist på raden utan minus räknas.
+  // Läge 2 bara när sådana rader är fler än beloppen med komma, annars blir t.ex. "McDonalds 7520" ett belopp.
   function showsOre(lines) {
     var dec = 0, krInt = 0, endInts = 0;
     lines.forEach(function (l) {
-      bankAmounts(l, false).forEach(function (a) { if (a.hasDec) dec++; else if (a.hasKr) krInt++; });
+      bankAmounts(l, 0).forEach(function (a) { if (a.hasDec) dec++; else if (a.hasKr) krInt++; });
       if (/[A-Za-zÅÄÖåäö].*\s[-−–—~=]?\d{3,6}\s*$/.test(maskDates(l))) endInts++;
     });
-    return krInt === 0 && (dec > 0 || endInts >= 2);
+    if (krInt > 0 || (dec === 0 && endInts < 2)) return 0;
+    return endInts > dec ? 2 : 1;
   }
 
   // Datum skrivet med siffror (2026-11-19, 19.11.2026), inte en rubrik som "Igår" eller "18 november"
@@ -350,6 +361,12 @@
     if (m && MONTHS[m[2]]) return withYear(+m[1], MONTHS[m[2]], m[3] ? +m[3] : 0, now);
     m = src.match(/^\s*(\d{1,2})\s?[/.]\s?(\d{1,2})\b(?![/.]\d)/);
     if (m) return withYear(+m[1], +m[2], 0, now);
+    // "Coop 18/11 -45,00": dag/månad mitt i raden (samma regel som maskDates: inte belopp som "-12.50")
+    var dm = maskDates(line) !== line && line.match(/(^|[^\d\-−–—~=+.,])(\d{1,2})[/.](\d{1,2})\b(?![.,]\d)(?!\s?(?:kr|sek)\b)/i);
+    if (dm && !(/[.]/.test(dm[0]) && /[-−–—~=]\s?$/.test(dm[1]))) {
+      var iso2 = withYear(+dm[2], +dm[3], 0, now);
+      if (iso2) return iso2;
+    }
     // Kortköp-rader har ofta datumet som ÅÅMMDD: "KORTKÖP 251118 WILLYS"
     m = src.match(/\b(2\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
     if (m) { var iso = validDate(2000 + +m[1], +m[2], +m[3]); if (plausible(iso, now)) return iso; }
@@ -371,7 +388,7 @@
   var BANK_NOISE = /(?<![A-Za-zÅÄÖåäö])(kortköp|kortkop|köp|kop|reserverat|reservation|prel|preliminär|preliminart|bokförd|bokford|debitering|betalning|autogiro|e-faktura|efaktura|överföring|kortnr|sek|kr|card|purchase|pending|visa|mastercard|debit)(?![A-Za-zÅÄÖåäö])/gi;
 
   function cleanMerchant(text) {
-    var s = text
+    var s = maskDates(text) // alla datum och klockslag bort ur namnet
       .replace(/\b\d{4}[-./]\d{1,2}[-./]\d{1,2}\b/g, ' ')
       .replace(/\b\d{1,2}\s?(?:\.|\s)\s?(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)[a-zåäö]*\.?(?:\s+20\d{2})?/gi, ' ')
       .replace(/\b\d{6}\b/g, ' ')
@@ -486,14 +503,17 @@
       lastRowLine = i;
     });
 
-    // Har banken minustecken på köpen är rader utan minus pengar in (lön, Swish till dig).
-    // Men OCR tappar ibland minustecknet: saknas det på många rader går det inte att lita på, och då är bara
-    // rader med + eller ord som "Lön" pengar in.
+    // Pengar in: rader med +, ord som "Lön" eller "Swish från", eller (när banken annars visar minus på köpen)
+    // en rad utan minus på minst 1 000 kr. OCR tappar ibland minustecknet på ett vanligt köp ("McDonalds 114,00"),
+    // så en mindre rad utan minus räknas som köp men markeras (signMissing) så att den kan kontrolleras.
     var signed = rows.filter(function (r) { return r.negative; }).length;
     var anyPlus = rows.some(function (r) { return r.plus; });
     var trustSign = anyNegative && !anyPlus && signed >= rows.length * 0.75;
+    var INCOME_WORDS = /^(lön|insättning|swish från|återbetalning|överföring från|csn|försäkringskassan|skatteåterbäring)/i;
     rows.forEach(function (r) {
-      r.incoming = r.plus || (trustSign && !r.negative) || /^(lön|insättning|swish från|återbetalning)/i.test(r.store);
+      var keyword = INCOME_WORDS.test(r.store);
+      r.incoming = r.plus || keyword || (trustSign && !r.negative && r.amount >= 1000);
+      r.signMissing = trustSign && !r.negative && !r.incoming;
       delete r.negative; delete r.plus; delete r.ownDate;
     });
     return rows;

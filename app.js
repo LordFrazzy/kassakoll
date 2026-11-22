@@ -1073,18 +1073,35 @@
     return res.data.text;
   }
 
-  // Som ocr(), men för skärmdumpar: ikoner och logotyper bredvid köpen läses som korta skräpord ("EH", "IH", "|")
-  // med låg säkerhet. Riktiga ord i en skarp skärmdump har nästan alltid över 80 %, så korta osäkra ord tas bort.
+  /* Som ocr(), men för skärmdumpar från bankappen.
+     Raderna byggs här av ordens position i stället för av Tesseracts radindelning: i många bankappar står beloppet
+     mitt emellan namnraden och datumraden, och då blandar Tesseract ihop raderna och tappar namnen.
+     Ett ord hör till en rad om dess mittpunkt ligger inom halva radhöjden. Raderna sorteras uppifrån och ner.
+     Ikoner och logotyper bredvid köpen läses som korta skräpord ("EH", "IH", "|") med låg säkerhet; riktiga ord
+     i en skarp skärmdump har nästan alltid över 80 %, så korta osäkra ord tas bort. */
   async function ocrScreenshot(image, psm) {
     var worker = await getWorker();
     await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '1' });
     var res = await worker.recognize(image);
-    var lines = res.data.lines;
-    if (!lines || !lines.length) return res.data.text;
+    var words = (res.data.words || []).filter(function (w) {
+      if (!w.text || !w.text.trim() || !w.bbox) return false;
+      return !(w.confidence < 45 && w.text.replace(/[^\wÅÄÖåäö]/g, '').length <= 3 && !/\d[.,]\d\d/.test(w.text));
+    }).map(function (w) {
+      return { text: w.text.trim(), x: w.bbox.x0, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0) };
+    });
+    if (!words.length) return res.data.text || '';
+    words.sort(function (a, b) { return a.cy - b.cy; });
+    var lines = [];
+    words.forEach(function (w) {
+      var line = null;
+      for (var i = lines.length - 1; i >= 0 && i >= lines.length - 3; i--) {
+        if (Math.abs(lines[i].cy - w.cy) < Math.min(lines[i].h, w.h) * 0.5) { line = lines[i]; break; }
+      }
+      if (line) line.words.push(w);
+      else lines.push({ cy: w.cy, h: w.h, words: [w] });
+    });
     return lines.map(function (l) {
-      return (l.words || []).filter(function (w) {
-        return !(w.confidence < 45 && w.text.replace(/[^\wÅÄÖåäö]/g, '').length <= 3 && !/\d[.,]\d\d/.test(w.text));
-      }).map(function (w) { return w.text; }).join(' ');
+      return l.words.sort(function (a, b) { return a.x - b.x; }).map(function (w) { return w.text; }).join(' ');
     }).join('\n');
   }
 
@@ -1326,12 +1343,13 @@
         ocrProgress = function (p) { if (token === bank.token) setBankStatus(label + ' ' + Math.round(p * 100) + ' %'); };
         var canvas = await prepareScreenshot(file);
         if (token !== bank.token) return;
-        var text = await ocrScreenshot(canvas, '6');
+        // Läge 11 = hitta all text var den än står (bäst när belopp och namn inte står på samma höjd)
+        var text = await ocrScreenshot(canvas, '11');
         var rows = KvittoParse.parseBank(text);
-        // Få köp, eller färre köp än datum i texten: läs en gång till på ett annat sätt och behåll det som gav flest
+        // Få köp, eller färre köp än datum i texten: läs en gång till som ett textblock och behåll det som gav flest
         if (rows.length < 3 || rows.length < KvittoParse.bankDateLines(text)) {
           label = 'Läser en gång till…';
-          var text2 = await ocrScreenshot(canvas, '4');
+          var text2 = await ocrScreenshot(canvas, '6');
           var rows2 = KvittoParse.parseBank(text2);
           if (rows2.length > rows.length) { text = text2; rows = rows2; }
         }
@@ -1371,6 +1389,7 @@
         date: r.date || today,
         noDate: !r.date,
         amountGuessed: r.amountGuessed,
+        signMissing: r.signMissing,
         amount: r.amount,
         category: r.incoming ? '' : accountFor(r.store, r.category),
         incoming: r.incoming,
@@ -1407,6 +1426,7 @@
       else if (r.dup) flag = '<p class="bank-flag">Finns redan' + (r.dup.image ? ' som kvitto' : '') + ': ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
       else if (r.noDate) flag = '<p class="bank-flag">Datumet syntes inte i bilden, kontrollera det.</p>';
       else if (r.amountGuessed) flag = '<p class="bank-flag">Kommat syntes inte i beloppet. Kontrollera att det stämmer.</p>';
+      else if (r.signMissing) flag = '<p class="bank-flag">Minustecknet syntes inte. Bocka ur om det var pengar in och inte ett köp.</p>';
       return '<li class="bank-row' + (r.on ? '' : ' off') + (r.on && !r.category ? ' need' : '') + '" data-i="' + i + '">' +
         '<input class="bank-check" type="checkbox" data-f="on" aria-label="Spara ' + esc(r.store) + '"' + (r.on ? ' checked' : '') + '>' +
         '<label class="b-store"><span class="sr">Butik</span><input type="text" data-f="store" value="' + esc(r.store) + '"></label>' +
