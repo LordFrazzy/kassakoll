@@ -366,7 +366,7 @@ input:focus-visible, select:focus-visible { background: var(--surface); }
 .thumb.none svg { width: 18px; height: 18px; }
 
 /* Dialoger */
-dialog { border: 1px solid var(--line); border-radius: 22px; padding: 0; background: var(--surface); color: var(--ink); width: min(700px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+dialog { border: 1px solid var(--line); border-radius: 22px; padding: 0; background: var(--surface); color: var(--ink); width: min(700px, calc(100vw - 24px)); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
 dialog::backdrop { background: rgba(10, 14, 12, 0.55); backdrop-filter: blur(3px); }
 .dlg-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .dlg-body { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 20px; padding: 20px; }
@@ -390,9 +390,12 @@ dialog::backdrop { background: rgba(10, 14, 12, 0.55); backdrop-filter: blur(3px
 
 /* Köp från bankappen */
 .bank-dialog { width: min(760px, calc(100vw - 24px)); }
-.bank-dialog[open] { display: flex; flex-direction: column; }
-.bank-dialog form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.bank-body { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; overflow-y: auto; min-height: 0; }
+/* Höjden sätts med flex "auto" (inte flex: 1): Safari på iPhone gör annars formuläret 0 px högt och rutan osynlig */
+.bank-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
+.bank-dialog form { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
+.bank-dialog .dlg-head, .bank-dialog .dlg-foot { flex: none; }
+.bank-body { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 0 1 auto; min-height: 0; }
+.bank-body > * { flex: none; }
 .bank-tools { display: flex; gap: 12px; }
 .bank-all { flex: 1 1 auto; max-width: 340px; }
 .bank-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
