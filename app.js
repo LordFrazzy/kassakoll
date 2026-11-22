@@ -1192,11 +1192,15 @@
   /* ---------- Köp från bankappen (skärmdump av kontohändelser) ---------- */
 
   // Skärmdumpar är skarpa men texten är liten och ofta ljus på mörkt: förstora, gråskala, vänd mörkt läge.
-  async function prepareScreenshot(file) {
+  // iPhone har ett tak för hur stora bilder som får ritas; går det över blir bilden helt tom utan felmeddelande.
+  // Därför max 6 miljoner pixlar, och blir bilden ändå tom ritas den om i mindre storlek.
+  async function prepareScreenshot(file, maxPixels) {
+    maxPixels = maxPixels || 6e6;
     var bmp = await createImageBitmap(file);
+    var origW = bmp.width, origH = bmp.height;
     var scale = Math.min(3, Math.max(1, 1800 / bmp.width));
-    if (bmp.width * bmp.height * scale * scale > 16e6) scale = Math.max(0.5, Math.sqrt(16e6 / (bmp.width * bmp.height)));
-    var w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    if (bmp.width * bmp.height * scale * scale > maxPixels) scale = Math.sqrt(maxPixels / (bmp.width * bmp.height));
+    var w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
     var c = document.createElement('canvas');
     c.width = w; c.height = h;
     var ctx = c.getContext('2d', { willReadFrequently: true });
@@ -1206,8 +1210,20 @@
     var img = ctx.getImageData(0, 0, w, h);
     var px = img.data;
     var n = w * h;
-    var total = 0;
-    for (var i = 0; i < n; i++) total += (px[i * 4] * 299 + px[i * 4 + 1] * 587 + px[i * 4 + 2] * 114) / 1000;
+    var total = 0, lo = 255, hi = 0;
+    for (var i = 0; i < n; i++) {
+      var lum = (px[i * 4] * 299 + px[i * 4 + 1] * 587 + px[i * 4 + 2] * 114) / 1000;
+      total += lum;
+      if (lum < lo) lo = lum;
+      if (lum > hi) hi = lum;
+    }
+    // Tom bild (allt en färg): ritningen misslyckades, försök igen mindre
+    if (hi - lo < 8 && maxPixels > 2e6) {
+      c.width = c.height = 0;
+      var smaller = await prepareScreenshot(file, maxPixels / 2.5);
+      smaller.retried = true;
+      return smaller;
+    }
     var invert = total / n < 110; // mörkt läge
     for (i = 0; i < n; i++) {
       var r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
@@ -1219,10 +1235,13 @@
       px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
     }
     ctx.putImageData(img, 0, 0);
+    c.origW = origW;
+    c.origH = origH;
+    c.inverted = invert;
     return c;
   }
 
-  var bank = { rows: [], token: 0, merchants: null };
+  var bank = { rows: [], token: 0, merchants: null, debug: [] };
 
   function merchantKey(store) {
     return String(store || '').toLowerCase()
@@ -1330,6 +1349,7 @@
     await loadMerchants();
     var texts = [];
     var found = [];
+    bank.debug = [];
     for (var f = 0; f < files.length; f++) {
       var file = files[f];
       var label = files.length > 1 ? 'Läser bild ' + (f + 1) + ' av ' + files.length + '…' : 'Läser skärmdumpen…';
@@ -1342,21 +1362,29 @@
         $('bank-imgs').appendChild(im);
         ocrProgress = function (p) { if (token === bank.token) setBankStatus(label + ' ' + Math.round(p * 100) + ' %'); };
         var canvas = await prepareScreenshot(file);
+        // Teknisk info för felsökning (följer med när texten kopieras)
+        var info = 'Bild ' + (f + 1) + ': ' + (file.type || '?') + ', ' + Math.round(file.size / 1024) + ' kB, ' +
+          canvas.origW + '×' + canvas.origH + ' -> ' + canvas.width + '×' + canvas.height + (canvas.inverted ? ', mörkt läge' : '') +
+          (canvas.retried ? ', mindre bild (första var tom)' : '');
         if (token !== bank.token) return;
         // Läge 11 = hitta all text var den än står (bäst när belopp och namn inte står på samma höjd)
         var text = await ocrScreenshot(canvas, '11');
         var rows = KvittoParse.parseBank(text);
+        info += ', läge 11: ' + rows.length + ' köp';
         // Få köp, eller färre köp än datum i texten: läs en gång till som ett textblock och behåll det som gav flest
         if (rows.length < 3 || rows.length < KvittoParse.bankDateLines(text)) {
           label = 'Läser en gång till…';
           var text2 = await ocrScreenshot(canvas, '6');
           var rows2 = KvittoParse.parseBank(text2);
+          info += ', läge 6: ' + rows2.length + ' köp';
           if (rows2.length > rows.length) { text = text2; rows = rows2; }
         }
         if (token !== bank.token) return;
+        bank.debug.push(info);
         texts.push(text.trim());
         found.push(rows);
       } catch (e) {
+        bank.debug.push('Bild ' + (f + 1) + ': fel: ' + ((e && e.message) || e));
         texts.push('(Bild ' + (f + 1) + ' kunde inte läsas)');
       }
     }
@@ -2190,7 +2218,10 @@
     $('bank-copy').addEventListener('click', async function () {
       var btn = this;
       var found = bank.rows.map(function (r) { return r.date + ' | ' + r.store + ' | ' + r.amount.toFixed(2) + (r.incoming ? ' (in)' : ''); });
-      var text = 'Kassakoll, lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +
+      var appScript = document.querySelector('script[src*="app.js"]');
+      var version = appScript && (appScript.src.match(/v=(\w+)/) || [])[1];
+      var text = 'Kassakoll ' + (version || '(okänd version)') + ', lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +
+        '\n\n' + (bank.debug || []).join('\n') + '\nSkärm: ' + screen.width + '×' + screen.height + ' · ' + navigator.userAgent +
         '\n\nTexten som lästes:\n' + $('bank-ocr-text').textContent;
       try {
         await navigator.clipboard.writeText(text);
