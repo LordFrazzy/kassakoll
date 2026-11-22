@@ -1087,7 +1087,7 @@
       if (!w.text || !w.text.trim() || !w.bbox) return false;
       return !(w.confidence < 45 && w.text.replace(/[^\wÅÄÖåäö]/g, '').length <= 3 && !/\d[.,]\d\d/.test(w.text));
     }).map(function (w) {
-      return { text: w.text.trim(), x: w.bbox.x0, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0) };
+      return { text: w.text.trim(), x: w.bbox.x0, y0: w.bbox.y0, y1: w.bbox.y1, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0) };
     });
     if (!words.length) return res.data.text || '';
     words.sort(function (a, b) { return a.cy - b.cy; });
@@ -1097,12 +1097,38 @@
       for (var i = lines.length - 1; i >= 0 && i >= lines.length - 3; i--) {
         if (Math.abs(lines[i].cy - w.cy) < Math.min(lines[i].h, w.h) * 0.5) { line = lines[i]; break; }
       }
-      if (line) line.words.push(w);
-      else lines.push({ cy: w.cy, h: w.h, words: [w] });
+      if (line) { line.words.push(w); line.y0 = Math.min(line.y0, w.y0); line.y1 = Math.max(line.y1, w.y1); }
+      else lines.push({ cy: w.cy, h: w.h, y0: w.y0, y1: w.y1, words: [w] });
     });
-    return lines.map(function (l) {
-      return l.words.sort(function (a, b) { return a.x - b.x; }).map(function (w) { return w.text; }).join(' ');
-    }).join('\n');
+    lines.forEach(function (l) {
+      l.text = l.words.sort(function (a, b) { return a.x - b.x; }).map(function (w) { return w.text; }).join(' ');
+    });
+
+    // Ett namn direkt följt av ett datum utan något belopp emellan: läsaren missade beloppet.
+    // Läs om bara högra halvan av just det köpet (där beloppet står), det går mycket säkrare än hela bilden.
+    var AMOUNT = /[-−–—~=]?\s?\d{1,3}(?:[  .]\d{3})*[.,]\s?\d{2}(?!\d)/;
+    var DATE_ONLY = /^\s*20\d{2}\s?-?\s?\d{2}\s?-?\s?\d{2}\s*$/;
+    for (var k = lines.length - 2; k >= 0; k--) {
+      var name = lines[k], dateLine = lines[k + 1];
+      if (AMOUNT.test(name.text) || !DATE_ONLY.test(dateLine.text)) continue;
+      if ((name.text.match(/[A-Za-zÅÄÖåäö]/g) || []).length < 3) continue;
+      var pad = Math.round(name.h * 0.6);
+      var top = Math.max(0, name.y0 - pad);
+      var rect = {
+        left: Math.round(image.width * 0.5),
+        top: top,
+        width: image.width - Math.round(image.width * 0.5),
+        height: Math.min(image.height, dateLine.y1 + pad) - top
+      };
+      try {
+        await worker.setParameters({ tessedit_pageseg_mode: '6' });
+        var again = await worker.recognize(image, { rectangle: rect });
+        var found = String(again.data.text || '').match(AMOUNT);
+        // ≈ först på raden talar om för tolkningen att beloppet var svårläst (visas med "kontrollera beloppet")
+        if (found) lines.splice(k + 1, 0, { text: '≈ ' + found[0].replace(/\s+/g, ' '), reread: true });
+      } catch (e) { /* inget belopp den här gången, köpet visas ändå utan belopp */ }
+    }
+    return lines.map(function (l) { return l.text; }).join('\n');
   }
 
   function setStatus(msg, warn) {
@@ -1414,7 +1440,7 @@
     // Bästa paren väljs först, så att en exakt träff inte "tas" av en sämre rad som råkar stå före i listan.
     var pairs = [];
     bank.rows.forEach(function (r, i) {
-      if (r.incoming) return;
+      if (r.incoming || r.amount == null) return;
       state.receipts.forEach(function (s) {
         var score = matchScore(r, s, s.note === 'Från bankappen');
         if (score > 0) pairs.push({ i: i, s: s, score: score });
@@ -1436,11 +1462,14 @@
         noDate: !r.date,
         amountGuessed: r.amountGuessed,
         signMissing: r.signMissing,
+        amountHard: r.amountHard,
         amount: r.amount,
+        amountMissing: r.amount == null,
         category: r.incoming ? '' : accountFor(r.store, r.category),
         incoming: r.incoming,
         dup: dup,
-        on: !r.incoming && !dup
+        // Utan belopp bockas köpet i först när beloppet skrivits in
+        on: !r.incoming && !dup && r.amount != null
       };
     });
 
@@ -1456,11 +1485,19 @@
     fillSelect($('bank-all-cat'), false, '');
     var missing = bank.rows.filter(function (r) { return r.on && !r.category; }).length;
     var on = bank.rows.filter(function (r) { return r.on; }).length;
-    setBankStatus('Hittade ' + bank.rows.length + (bank.rows.length === 1 ? ' rad. ' : ' rader. ') + (!on
-      ? 'Alla verkar redan vara sparade eller är pengar in. Bocka i det du ändå vill spara.'
+    var saved = bank.rows.filter(function (r) { return r.dup; }).length;
+    var incoming = bank.rows.filter(function (r) { return r.incoming; }).length;
+    // Säg tydligt hur många som är nya och hur många som redan finns, så att urbockade rader inte ser ut att saknas
+    var parts = [on + (on === 1 ? ' nytt köp' : ' nya köp')];
+    if (saved) parts.push(saved + ' redan sparade (urbockade)');
+    if (incoming) parts.push(incoming + ' pengar in (urbockade)');
+    var noAmount = bank.rows.filter(function (r) { return r.amountMissing && !r.dup; }).length;
+    if (noAmount) parts.push(noAmount + ' där beloppet inte syntes (skriv in det)');
+    setBankStatus('Hittade ' + bank.rows.length + (bank.rows.length === 1 ? ' rad: ' : ' rader: ') + parts.join(', ') + '. ' + (!on
+      ? (noAmount ? 'Skriv in beloppen som saknas för att spara dem.' : 'Allt i bilden finns redan sparat, så det finns inget nytt att spara.')
       : missing
-      ? missing + ' av ' + on + ' markerade köp behöver ett konto.'
-      : 'Alla markerade köp har fått ett konto. Kontrollera och spara.'), false);
+      ? missing + ' av de nya behöver ett konto.'
+      : 'Kontrollera och spara.'), false);
   }
 
   function renderBankRows() {
@@ -1468,16 +1505,18 @@
     if (!bank.rows.length) { list.innerHTML = ''; updateBankSave(); return; }
     list.innerHTML = bank.rows.map(function (r, i) {
       var flag = '';
-      if (r.incoming) flag = '<p class="bank-flag in">Pengar in. Inkomster lägger du under Budget, så den här sparas inte om du inte bockar i den.</p>';
-      else if (r.dup) flag = '<p class="bank-flag">Finns redan' + (r.dup.image ? ' som kvitto' : '') + ': ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Bocka i om det är ett annat köp.</p>';
+      if (r.amountMissing && r.amount == null) flag = '<p class="bank-flag">Beloppet syntes inte i bilden. Skriv in det, så bockas köpet i.</p>';
+      else if (r.incoming) flag = '<p class="bank-flag in">Pengar in. Inkomster lägger du under Budget, så den här sparas inte om du inte bockar i den.</p>';
+      else if (r.dup) flag = '<p class="bank-flag">Redan sparat' + (r.dup.image ? ' som kvitto' : '') + ': ' + esc(r.dup.store) + ', ' + esc(dateLabel(r.dup.date)) + ', ' + esc(kr2(r.dup.amount)) + '. Sparas inte igen. Bocka i bara om det är ett till likadant köp.</p>';
       else if (r.noDate) flag = '<p class="bank-flag">Datumet syntes inte i bilden, kontrollera det.</p>';
+      else if (r.amountHard) flag = '<p class="bank-flag">Beloppet var svårt att läsa. Kontrollera att det stämmer med bilden.</p>';
       else if (r.amountGuessed) flag = '<p class="bank-flag">Kommat syntes inte i beloppet. Kontrollera att det stämmer.</p>';
       else if (r.signMissing) flag = '<p class="bank-flag">Minustecknet syntes inte. Bocka ur om det var pengar in och inte ett köp.</p>';
       return '<li class="bank-row' + (r.on ? '' : ' off') + (r.on && !r.category ? ' need' : '') + '" data-i="' + i + '">' +
         '<input class="bank-check" type="checkbox" data-f="on" aria-label="Spara ' + esc(r.store) + '"' + (r.on ? ' checked' : '') + '>' +
         '<label class="b-store"><span class="sr">Butik</span><input type="text" data-f="store" value="' + esc(r.store) + '"></label>' +
         '<label class="b-date"><span class="sr">Datum</span><input type="date" data-f="date" value="' + esc(r.date) + '"></label>' +
-        '<label class="b-amount"><span class="sr">Belopp i kronor</span><input type="number" inputmode="decimal" min="0" step="0.01" data-f="amount" value="' + r.amount.toFixed(2) + '"></label>' +
+        '<label class="b-amount"><span class="sr">Belopp i kronor</span><input type="number" inputmode="decimal" min="0" step="0.01" data-f="amount" placeholder="Belopp" value="' + (r.amount == null ? '' : r.amount.toFixed(2)) + '"></label>' +
         '<label class="b-cat"><span class="sr">Konto</span><select data-f="category"></select></label>' +
         flag + '</li>';
     }).join('');
@@ -1489,11 +1528,11 @@
 
   function updateBankSave() {
     var on = bank.rows.filter(function (r) { return r.on; });
-    var ready = on.length && on.every(function (r) { return r.category && r.store.trim() && r.date && r.amount >= 0; });
+    var ready = on.length && on.every(function (r) { return r.category && r.store.trim() && r.date && r.amount != null && r.amount > 0; });
     var btn = $('bank-save');
     btn.disabled = !ready;
-    btn.textContent = on.length ? 'Spara ' + on.length + ' köp' : 'Spara';
-    btn.title = on.length && !ready ? 'Välj konto för alla markerade köp' : '';
+    btn.textContent = on.length ? 'Spara ' + on.length + ' köp' : 'Inget nytt att spara';
+    btn.title = on.length && !ready ? 'Välj konto och skriv belopp för alla markerade köp' : '';
   }
 
   function bankInput(ev) {
@@ -1502,7 +1541,17 @@
     if (!li || !f) return;
     var r = bank.rows[+li.dataset.i];
     if (f === 'on') r.on = ev.target.checked;
-    else if (f === 'amount') r.amount = num(ev.target.value);
+    else if (f === 'amount') {
+      var had = r.amount != null && r.amount > 0;
+      r.amount = ev.target.value === '' ? null : num(ev.target.value);
+      // Köp vars belopp saknades bockas i när beloppet skrivs in
+      if (r.amountMissing && !had && r.amount > 0 && !r.on) {
+        r.on = true;
+        li.querySelector('.bank-check').checked = true;
+        var fl = li.querySelector('.bank-flag');
+        if (fl) fl.remove();
+      }
+    }
     else r[f] = ev.target.value;
     li.classList.toggle('off', !r.on);
     li.classList.toggle('need', r.on && !r.category);
@@ -2237,7 +2286,7 @@
       var btn = this;
       var found = bank.rows.map(function (r) {
         var why = r.incoming ? 'pengar in' : r.dup ? 'finns redan: ' + r.dup.store + ' ' + r.dup.date + ' ' + r.dup.amount : '';
-        return (r.on ? '[x] ' : '[ ] ') + r.date + ' | ' + r.store + ' | ' + r.amount.toFixed(2) + (why ? ' (' + why + ')' : '');
+        return (r.on ? '[x] ' : '[ ] ') + r.date + ' | ' + r.store + ' | ' + (r.amount == null ? 'belopp saknas' : r.amount.toFixed(2)) + (why ? ' (' + why + ')' : '');
       });
       var appScript = document.querySelector('script[src*="app.js"]');
       var version = appScript && (appScript.src.match(/v=(\w+)/) || [])[1];

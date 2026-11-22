@@ -453,6 +453,18 @@
         var rest = cleanMerchant(line.replace(WEEKDAYS, ' '));
         if (date && letterCount(rest) < 3) {
           if (attachDate(date, line, i)) return;
+          // Namn direkt följt av sifferdatum men inget belopp ("Prel Ryde Swe" / "2026-11-21"): OCR missade beloppet.
+          // Köpet tas med utan belopp så att det inte försvinner tyst.
+          if (pendingName && pendingName.i === i - 1 && NUMERIC_DATE.test(line) && (dateBelow || !rows.length || !currentDate)) {
+            var missingStore = cleanMerchant(pendingName.text);
+            pendingName = null;
+            if (letterCount(missingStore) >= 2) {
+              dateBelow = true;
+              addRow(missingStore, date, null, line, i);
+              rows[rows.length - 1].ownDate = true;
+              return;
+            }
+          }
           // Rubrik med datum ("Idag", "Måndag 18 nov", "18 november 2026") gäller köpen under
           currentDate = date; pendingName = null; return;
         }
@@ -463,12 +475,14 @@
           if (lastRowLine === i - 1) lastRowLine = i;
           return;
         }
-        if (letters >= 3) pendingName = { text: line, date: date };
+        if (letters >= 3) pendingName = { text: line, date: date, i: i };
         return;
       }
 
       // Det första beloppet är händelsen, ett andra är oftast saldot efter
       var a = amounts[0];
+      // "≈ -27,40": appen läste om beloppet separat för att det var svårläst
+      a.hard = /^≈/.test(line);
       var nameText = line.slice(0, a.index) + ' ' + line.slice(a.index + a.text.length);
       amounts.slice(1).forEach(function (b) { nameText = nameText.replace(b.text, ' '); });
       var store = cleanMerchant(nameText);
@@ -482,6 +496,11 @@
       if (letterCount(store) < 2) return; // t.ex. "Saldo 12 345,67" utan text kvar, eller skräp
       if (/^(saldo|disponibelt|tillgängligt|totalt|summa|kontosaldo|beviljad kredit)\b/i.test(store)) return;
       if (a.negative) anyNegative = true;
+      addRow(store, date, a, line, i);
+    });
+
+    // Lägger till ett köp. a = beloppet, eller null om beloppet inte gick att läsa (köpet visas ändå, med tomt belopp)
+    function addRow(store, date, a, line, i) {
       var key = keyText(store);
       var key2 = store.toLowerCase().replace(/[^a-z0-9åäö]/g, ''); // behåller siffror (OKQ8, St1)
       var category = '';
@@ -493,22 +512,25 @@
         store: store,
         date: date || (dateBelow ? null : currentDate),
         ownDate: !!date,
-        amount: Math.round(a.value * 100) / 100,
-        amountGuessed: a.guessed,
-        negative: a.negative,
-        plus: a.plus,
+        amount: a ? Math.round(a.value * 100) / 100 : null,
+        amountMissing: !a,
+        amountGuessed: a ? a.guessed : false,
+        amountHard: a ? !!a.hard : false,
+        negative: a ? a.negative : true,
+        plus: a ? a.plus : false,
         category: category,
         raw: line
       });
       lastRowLine = i;
-    });
+    }
 
     // Pengar in: rader med +, ord som "Lön" eller "Swish från", eller (när banken annars visar minus på köpen)
     // en rad utan minus på minst 1 000 kr. OCR tappar ibland minustecknet på ett vanligt köp ("McDonalds 114,00"),
     // så en mindre rad utan minus räknas som köp men markeras (signMissing) så att den kan kontrolleras.
-    var signed = rows.filter(function (r) { return r.negative; }).length;
+    var withAmount = rows.filter(function (r) { return !r.amountMissing; });
+    var signed = withAmount.filter(function (r) { return r.negative; }).length;
     var anyPlus = rows.some(function (r) { return r.plus; });
-    var trustSign = anyNegative && !anyPlus && signed >= rows.length * 0.75;
+    var trustSign = anyNegative && !anyPlus && signed >= withAmount.length * 0.75;
     var INCOME_WORDS = /^(lön|insättning|swish från|återbetalning|överföring från|csn|försäkringskassan|skatteåterbäring)/i;
     rows.forEach(function (r) {
       var keyword = INCOME_WORDS.test(r.store);

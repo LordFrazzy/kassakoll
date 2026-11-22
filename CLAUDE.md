@@ -63,6 +63,9 @@ ocrScreenshot() i app.js läser med psm 11 (gles text) och bygger raderna själv
 radhöjden = samma rad), eftersom användarens bank har beloppet mitt emellan namn- och datumraden; då blandar Tesseracts
 egen radindelning ihop allt. Korta ord med låg säkerhet (ikoner) tas bort; stripAvatar() i parse.js tar bort bokstavsikonen
 ("H Hemköp"). Andra läsningen (psm 6) körs om < 3 köp eller färre köp än sifferdatum i texten.
+Namn följt direkt av datum utan belopp: ocrScreenshot läser om högra halvan av just det köpet (rectangle, psm 6) och lägger
+in beloppet som "≈ -27,40" (parseBank markerar amountHard). Hittas inget blir köpet ändå en rad med amount null
+(amountMissing), urbockad tills användaren skriver beloppet.
 Belopp med punkt ("-94.00") får inte tas för datum: maskDates() tar bara giltiga dag/månad och inte efter minustecken.
 Heltal utan minus räknas som belopp bara när OCR tappar kommat oftare än det läser det (läge 2), så "McDonalds 7520" är ett namn.
 Granskning i #bank-dialog: pengar in och troliga dubbletter är urbockade.
