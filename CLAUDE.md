@@ -56,6 +56,11 @@ Datumrubriker ("Idag", "Igår", "Fre 20 nov") gäller raderna under. Andra belop
 Användarens bank: namn + belopp på en rad, sifferdatum (2026-11-21, ev. med saldo) på raden UNDER -> dateBelow i parseBank.
 Minus läses också som ~ = —. Visar bilden ören (showsOre) blir heltal utan "kr" ören som tappat kommat ("-24550" = 245,50, flaggas).
 Dubbletter mellan överlappande bilder tas bort, men likadana köp i samma bild behålls (två bussbiljetter samma dag).
+Statusord ("Prel", "Swish", "Kortköp") slängs bara som egen rad; i början av ett namn är de en del av köpet.
+Heltal sist på raden räknas som ören om banken visar ören (OCR tappar både minus och komma). Saknas minus på
+många rader litar vi inte på tecknet (bara + och "Lön" m.fl. = pengar in).
+ocrScreenshot() i app.js tar bort korta ord med låg säkerhet (ikoner); stripAvatar() i parse.js tar bort bokstavsikonen
+("H Hemköp"). Andra läsningen (psm 4) körs om < 3 köp eller färre köp än sifferdatum i texten.
 Granskning i #bank-dialog: pengar in och troliga dubbletter är urbockade.
 Dubbletter: matchScore()/findMatch() i app.js väger belopp, datum och butiksnamn (sameStore: gemensamt ord,
 Swish kräver exakt samma mottagare). Samma belopp + samma butik inom 10 dagar, eller samma belopp inom 4 dagar.

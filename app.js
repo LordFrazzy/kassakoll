@@ -1073,6 +1073,21 @@
     return res.data.text;
   }
 
+  // Som ocr(), men för skärmdumpar: ikoner och logotyper bredvid köpen läses som korta skräpord ("EH", "IH", "|")
+  // med låg säkerhet. Riktiga ord i en skarp skärmdump har nästan alltid över 80 %, så korta osäkra ord tas bort.
+  async function ocrScreenshot(image, psm) {
+    var worker = await getWorker();
+    await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '1' });
+    var res = await worker.recognize(image);
+    var lines = res.data.lines;
+    if (!lines || !lines.length) return res.data.text;
+    return lines.map(function (l) {
+      return (l.words || []).filter(function (w) {
+        return !(w.confidence < 45 && w.text.replace(/[^\wÅÄÖåäö]/g, '').length <= 3 && !/\d[.,]\d\d/.test(w.text));
+      }).map(function (w) { return w.text; }).join(' ');
+    }).join('\n');
+  }
+
   function setStatus(msg, warn) {
     var el = $('scan-status');
     el.textContent = msg;
@@ -1311,11 +1326,12 @@
         ocrProgress = function (p) { if (token === bank.token) setBankStatus(label + ' ' + Math.round(p * 100) + ' %'); };
         var canvas = await prepareScreenshot(file);
         if (token !== bank.token) return;
-        var text = await ocr(canvas, '6');
+        var text = await ocrScreenshot(canvas, '6');
         var rows = KvittoParse.parseBank(text);
-        // Få rader: prova att läsa spalt för spalt i stället
-        if (rows.length < 2) {
-          var text2 = await ocr(canvas, '4');
+        // Få köp, eller färre köp än datum i texten: läs en gång till på ett annat sätt och behåll det som gav flest
+        if (rows.length < 3 || rows.length < KvittoParse.bankDateLines(text)) {
+          label = 'Läser en gång till…';
+          var text2 = await ocrScreenshot(canvas, '4');
           var rows2 = KvittoParse.parseBank(text2);
           if (rows2.length > rows.length) { text = text2; rows = rows2; }
         }

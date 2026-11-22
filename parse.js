@@ -289,9 +289,10 @@
     var blank = function (t) { return t.replace(/./g, ' '); };
     return line
       .replace(/\b\d{2,4}[-./]\d{1,2}[-./]\d{1,4}\b/g, blank)
+      .replace(/\b20\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/g, blank) // 20261121
       .replace(/\b\d{1,2}[/.]\d{1,2}\b(?![.,]\d)/g, blank)
       .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, blank)
-      .replace(/\b\d{1,2}\.?\s(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)/gi, blank);
+      .replace(/\b\d{1,2}\.?\s(?:jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)[a-zåäö]*\.?(?:\s+20\d{2}\b)?/gi, blank);
   }
 
   // oreMode: banken visar alltid ören, så ett heltal utan "kr" är ett belopp där OCR tappade kommat ("-24550" = 245,50)
@@ -299,14 +300,17 @@
     var out = [];
     var m;
     var src = maskDates(line);
+    var end = src.replace(/\s+$/, '').length;
     BANK_AMOUNT_RE.lastIndex = 0;
     while ((m = BANK_AMOUNT_RE.exec(src))) {
       var hasDec = m[3] != null;
       var hasSign = !!m[1] && m[1] !== '+';
       var hasKr = !!m[4] || /SEK|kr/i.test(m[0].slice(0, 6));
-      // Heltal räknas bara som belopp med minustecken eller "kr" (annars är det t.ex. ett datum eller kortnummer)
-      if (!hasDec && !hasSign && !hasKr) continue;
       var digits = m[2].replace(/[\s .]/g, '');
+      // Sist på raden i en bank som visar ören: ett belopp där OCR tappade både minus och komma ("SPOTIFY 11900")
+      var bareAtEnd = oreMode && !hasDec && !hasKr && digits.length >= 3 && m.index + m[0].length === end;
+      // Annars räknas heltal bara som belopp med minustecken eller "kr" (inte t.ex. ett datum eller kortnummer)
+      if (!hasDec && !hasSign && !hasKr && !bareAtEnd) continue;
       var guessed = false;
       var n;
       if (hasDec) n = parseFloat(digits + '.' + m[3]);
@@ -319,13 +323,15 @@
     return out;
   }
 
-  // Visar banken ören på beloppen? (minst ett belopp med decimaler och inga heltal med "kr")
+  // Visar banken ören på beloppen? Inga heltal med "kr", och antingen belopp med decimaler
+  // eller flera rader som slutar på ett tal med minst tre siffror (där OCR tappat kommat)
   function showsOre(lines) {
-    var dec = 0, krInt = 0;
+    var dec = 0, krInt = 0, endInts = 0;
     lines.forEach(function (l) {
       bankAmounts(l, false).forEach(function (a) { if (a.hasDec) dec++; else if (a.hasKr) krInt++; });
+      if (/[A-Za-zÅÄÖåäö].*\s[-−–—~=]?\d{3,6}\s*$/.test(maskDates(l))) endInts++;
     });
-    return dec > 0 && krInt === 0;
+    return krInt === 0 && (dec > 0 || endInts >= 2);
   }
 
   // Datum skrivet med siffror (2026-11-19, 19.11.2026), inte en rubrik som "Igår" eller "18 november"
@@ -386,11 +392,21 @@
 
   function letterCount(s) { return (s.match(/[A-Za-zÅÄÖåäö]/g) || []).length; }
 
+  // Bankappar visar ofta en bokstav i en cirkel bredvid köpet ("H" för Hemköp). Den läses som ett eget ord
+  // först på raden och tas bort om den börjar som namnet efter: "H Hemköp City", "Pp Prel MAX", "s Swish till".
+  function stripAvatar(line) {
+    // En bokstav, eller två där den andra är liten ("Pp"). Inte "SJ" eller "SL", som är riktiga namn.
+    var m = line.match(/^([A-Za-zÅÄÖåäö](?:[a-zåäö])?)\s+([A-Za-zÅÄÖåäö])/);
+    if (!m) return line;
+    if (m[1][0].toLowerCase() !== m[2].toLowerCase()) return line;
+    return line.slice(m[1].length).trim();
+  }
+
   // Tolkar texten från en skärmdump av kontohändelser till en lista med köp.
   // Varje rad: { store, date, amount, incoming, category, raw }
   function parseBank(text, nowMs) {
     var now = nowMs || Date.now();
-    var lines = String(text || '').split(/\r?\n/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+    var lines = String(text || '').split(/\r?\n/).map(function (l) { return stripAvatar(l.replace(/\s+/g, ' ').trim()); }).filter(Boolean);
     var rows = [];
     var currentDate = null;
     var pendingName = null; // namn på en rad utan belopp, beloppet kan stå på raden under
@@ -425,7 +441,8 @@
         }
         if (date && WEEKDAYS.test(line)) { currentDate = date; pendingName = null; return; }
         // Kategori- eller statusrad under ett köp ("Kortköp", "Reserverat") hör till raden ovan
-        if (/^(kortköp|kortkop|reserverat|swish|autogiro|e-faktura|överföring|insättning|lön|prel)/i.test(line) && rows.length && !pendingName) {
+        // Bara om raden är ENBART ett sådant ord: "Prel ICA NÄRA" eller "Swish till Kim" är namnet på nästa köp
+        if (/^(kortköp|kortkop|köp|reserverat|reservation|swish|autogiro|e-faktura|efaktura|överföring|insättning|lön|prel|preliminär|preliminärt|bokförd)\.?$/i.test(line) && rows.length && !pendingName) {
           if (lastRowLine === i - 1) lastRowLine = i;
           return;
         }
@@ -469,15 +486,25 @@
       lastRowLine = i;
     });
 
-    // Har banken minustecken på köpen är rader utan minus pengar in (lön, Swish till dig)
+    // Har banken minustecken på köpen är rader utan minus pengar in (lön, Swish till dig).
+    // Men OCR tappar ibland minustecknet: saknas det på många rader går det inte att lita på, och då är bara
+    // rader med + eller ord som "Lön" pengar in.
+    var signed = rows.filter(function (r) { return r.negative; }).length;
+    var anyPlus = rows.some(function (r) { return r.plus; });
+    var trustSign = anyNegative && !anyPlus && signed >= rows.length * 0.75;
     rows.forEach(function (r) {
-      r.incoming = r.plus || (anyNegative && !r.negative) || /^(lön|insättning|swish från|återbetalning)/i.test(r.store);
+      r.incoming = r.plus || (trustSign && !r.negative) || /^(lön|insättning|swish från|återbetalning)/i.test(r.store);
       delete r.negative; delete r.plus; delete r.ownDate;
     });
     return rows;
   }
 
-  var api = { parseAmount: parseAmount, parseReceipt: parseReceipt, parseBank: parseBank, findTotal: findTotal, findDate: findDate, amountsIn: amountsIn };
+  // Ungefär hur många köp texten borde ha: rader med ett sifferdatum (banker som skriver datum per köp)
+  function bankDateLines(text) {
+    return String(text || '').split(/\r?\n/).filter(function (l) { return NUMERIC_DATE.test(l); }).length;
+  }
+
+  var api = { parseAmount: parseAmount, parseReceipt: parseReceipt, parseBank: parseBank, bankDateLines: bankDateLines, findTotal: findTotal, findDate: findDate, amountsIn: amountsIn };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KvittoParse = api;
 })(typeof window !== 'undefined' ? window : globalThis);
