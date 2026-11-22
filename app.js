@@ -1288,14 +1288,17 @@
     return Math.abs(new Date(a + 'T12:00').getTime() - new Date(b + 'T12:00').getTime()) / 86400000;
   }
   // Poäng för hur troligt det är att två köp är samma. 0 = inte samma.
-  function matchScore(a, b) {
+  // bothBank: båda köpen kommer från bankappen. Då är datumen bankens egna och exakta, och samma butik med samma belopp
+  // en annan dag är ett NYTT köp (busskort, elsparkcykel, prenumeration). Bara samma dag räknas som samma köp.
+  function matchScore(a, b, bothBank) {
     if (!a.date || !b.date) return 0;
     var diff = Math.abs(a.amount - b.amount);
     var days = daysApart(a.date, b.date);
     var named = sameStore(a.store, b.store);
+    if (bothBank) return diff < 0.01 && named && days < 0.5 ? 100 : 0;
     if (diff < 0.01) {
       if (named && days <= 10) return 100 - days;
-      if (days <= 4) return 60 - days * 5;
+      if (days <= 2) return 60 - days * 5;
       return 0;
     }
     // Avrundat eller felläst belopp på kvittot: kräver samma butik och nära datum
@@ -1303,11 +1306,12 @@
     return 0;
   }
   // Bästa matchningen bland sparade köp som inte redan är parade med något annat
-  function findMatch(row, pool, used, skipId) {
+  // fromBank: raden kommer från en bankbild (jämförs då strängare mot köp som också kom från bankappen)
+  function findMatch(row, pool, used, skipId, fromBank) {
     var best = null, bestScore = 0;
     pool.forEach(function (r) {
       if (r.id === skipId || (used && used[r.id])) return;
-      var s = matchScore(row, r);
+      var s = matchScore(row, r, fromBank && r.note === 'Från bankappen');
       if (s > bestScore) { best = r; bestScore = s; }
     });
     return best;
@@ -1406,11 +1410,25 @@
       taken[k] = (taken[k] || 0) + 1;
       return taken[k] <= most[k];
     });
-    // Varje sparat köp kan bara vara dubblett till en rad (två köp på 59 kr samma vecka är två köp)
-    var used = {};
-    bank.rows = bank.rows.map(function (r) {
-      var dup = r.incoming ? null : findMatch(r, state.receipts, used);
-      if (dup) used[dup.id] = true;
+    // Varje sparat köp kan bara vara dubblett till en rad (två köp på 59 kr samma vecka är två köp).
+    // Bästa paren väljs först, så att en exakt träff inte "tas" av en sämre rad som råkar stå före i listan.
+    var pairs = [];
+    bank.rows.forEach(function (r, i) {
+      if (r.incoming) return;
+      state.receipts.forEach(function (s) {
+        var score = matchScore(r, s, s.note === 'Från bankappen');
+        if (score > 0) pairs.push({ i: i, s: s, score: score });
+      });
+    });
+    pairs.sort(function (a, b) { return b.score - a.score; });
+    var dupOf = {}, used = {};
+    pairs.forEach(function (p) {
+      if (dupOf[p.i] || used[p.s.id]) return;
+      dupOf[p.i] = p.s;
+      used[p.s.id] = true;
+    });
+    bank.rows = bank.rows.map(function (r, i) {
+      var dup = dupOf[i] || null;
       return {
         id: uid(),
         store: r.store,
@@ -2217,7 +2235,10 @@
     // Kopiera den lästa texten (och vad som hittades), t.ex. för att visa varför köp saknas
     $('bank-copy').addEventListener('click', async function () {
       var btn = this;
-      var found = bank.rows.map(function (r) { return r.date + ' | ' + r.store + ' | ' + r.amount.toFixed(2) + (r.incoming ? ' (in)' : ''); });
+      var found = bank.rows.map(function (r) {
+        var why = r.incoming ? 'pengar in' : r.dup ? 'finns redan: ' + r.dup.store + ' ' + r.dup.date + ' ' + r.dup.amount : '';
+        return (r.on ? '[x] ' : '[ ] ') + r.date + ' | ' + r.store + ' | ' + r.amount.toFixed(2) + (why ? ' (' + why + ')' : '');
+      });
       var appScript = document.querySelector('script[src*="app.js"]');
       var version = appScript && (appScript.src.match(/v=(\w+)/) || [])[1];
       var text = 'Kassakoll ' + (version || '(okänd version)') + ', lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +

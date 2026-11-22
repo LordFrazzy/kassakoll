@@ -67,8 +67,10 @@ Belopp med punkt ("-94.00") får inte tas för datum: maskDates() tar bara gilti
 Heltal utan minus räknas som belopp bara när OCR tappar kommat oftare än det läser det (läge 2), så "McDonalds 7520" är ett namn.
 Granskning i #bank-dialog: pengar in och troliga dubbletter är urbockade.
 Dubbletter: matchScore()/findMatch() i app.js väger belopp, datum och butiksnamn (sameStore: gemensamt ord,
-Swish kräver exakt samma mottagare). Samma belopp + samma butik inom 10 dagar, eller samma belopp inom 4 dagar.
-Varje sparat köp paras bara med en rad. Nytt kvitto som matchar ett sparat köp: #match-box frågar "koppla ihop"
+Swish kräver exakt samma mottagare). Kvitto mot bank: samma belopp + samma butik inom 10 dagar, eller samma belopp
+inom 2 dagar. Bank mot bank (sparat köp med note "Från bankappen"): samma butik, belopp OCH samma dag, annars är det
+ett nytt köp (busskort, Qick, prenumerationer återkommer med samma belopp). Paren väljs bäst först, varje sparat köp
+paras bara med en rad. Nytt kvitto som matchar ett sparat köp: #match-box frågar "koppla ihop"
 (sparas över det befintliga med kvittots uppgifter och bild) eller "annat köp". Sparas som kvitton utan bild,
 note "Från bankappen". Valt konto per butik minns i settings/merchants (map: merchantKey -> konto-id).
 
