@@ -40,6 +40,8 @@ när målet skapades). Uppskattning från genomsnittlig ökning per dag senaste 
 ## Inloggning
 Om config.js är ifylld laddas supabase-js (CDN) och startCloud() i app.js visar inloggningen (#auth) före allt annat.
 Efter inloggning DB.useCloud(); är molnet tomt flyttas lokal IndexedDB-data upp (migrateLocal, lokal kopia ligger kvar).
+Inloggning är frivillig: "Fortsätt utan att logga in" (#auth-skip) sparar localStorage 'kassakoll-utan-inloggning' = '1'
+och kör lokalt läge; knappen #login-btn i toppen tar bort valet och laddar om. Når appen inte molnet visar bannern "Använd utan inloggning".
 Kvittobilder kan vara Blob eller URL-sträng: använd imageUrl()/freeUrl() i app.js, inte URL.createObjectURL direkt.
 
 ## Spenderat: betyg och grafer

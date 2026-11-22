@@ -2207,6 +2207,10 @@
         msg('');
       }
       $('auth-switch').onclick = function () { setMode(mode === 'login' ? 'signup' : 'login'); };
+      $('auth-skip').onclick = function () {
+        $('auth').hidden = true;
+        resolve(null); // null = använd sidan utan inloggning
+      };
       $('auth-forgot').onclick = function () { setMode('forgot'); };
       form.onsubmit = async function (ev) {
         ev.preventDefault();
@@ -2283,7 +2287,8 @@
     });
     var session = (await client.auth.getSession()).data.session;
     if (!session || recovering) session = await showAuth(client, recovering ? 'newpass' : 'login');
-    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if (/access_token|type=recovery/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+    if (!session) { useLocal(); return; }
 
     var count = await DB.useCloud(client, session.user.id);
     if (count === 0) {
@@ -2302,8 +2307,23 @@
     };
   }
 
+  // Valet "utan inloggning" kommer ihåg i webbläsaren. Knappen Logga in i toppen tar fram inloggningen igen.
+  var LOCAL_KEY = 'kassakoll-utan-inloggning';
+  function wantsLocal() {
+    try { return localStorage.getItem(LOCAL_KEY) === '1'; } catch (e) { return false; }
+  }
+  function useLocal() {
+    try { localStorage.setItem(LOCAL_KEY, '1'); } catch (e) { /* kommer inte ihåg valet, frågar igen nästa gång */ }
+    $('login-btn').hidden = false;
+  }
+  function askLogin() {
+    try { localStorage.removeItem(LOCAL_KEY); } catch (e) { /* ignoreras */ }
+    location.reload();
+  }
+
   async function init() {
     bind();
+    $('login-btn').addEventListener('click', askLogin);
     var saved = null;
     try { saved = localStorage.getItem('kassakoll-view'); } catch (e) { /* ignoreras */ }
     setView(viewFromHash() || saved || 'budget');
@@ -2312,12 +2332,21 @@
       if (ev.reason && ev.reason.cloud) showBanner('Kunde inte spara till ditt konto. Kontrollera internetanslutningen och försök igen.', true);
     });
     var cfg = cloudConfig();
-    if (cfg) {
+    if (cfg && wantsLocal()) {
+      $('login-btn').hidden = false;
+    } else if (cfg) {
       try {
         await startCloud(cfg);
       } catch (e) {
         $('auth').hidden = true;
-        showBanner(e.cloud ? 'Kunde inte hämta dina data. Kontrollera internetanslutningen och ladda om sidan.' : authError(e), true);
+        showBanner((e.cloud ? 'Kunde inte hämta dina data från ditt konto.' : authError(e)) +
+          ' Ladda om sidan för att försöka igen, eller använd Kassakoll utan inloggning så länge (sparas bara i den här webbläsaren). ', true);
+        var skip = document.createElement('button');
+        skip.type = 'button';
+        skip.className = 'link-btn';
+        skip.textContent = 'Använd utan inloggning';
+        skip.onclick = function () { useLocal(); location.reload(); };
+        $('banner').appendChild(skip);
         $('month-label').textContent = monthLabel(state.month);
         return;
       }

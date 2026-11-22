@@ -31,6 +31,11 @@
         <button class="link-btn" type="button" id="auth-switch">Inget konto? Skapa ett</button>
         <button class="link-btn" type="button" id="auth-forgot">Glömt lösenord?</button>
       </div>
+      <div class="auth-skip">
+        <span class="auth-or">eller</span>
+        <button class="btn" type="button" id="auth-skip">Fortsätt utan att logga in</button>
+        <p class="hint">Då sparas allt bara i den här webbläsaren. Du kan logga in senare med knappen uppe till höger.</p>
+      </div>
     </form>
   </div>
 
@@ -59,6 +64,10 @@
           <span>Saldo</span>
         </button>
       </nav>
+      <button class="btn login-btn" type="button" id="login-btn" hidden title="Logga in för att spara i molnet och använda Kassakoll på flera enheter">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l4 4-4 4M4 12h10"/></svg>
+        <span>Logga in</span>
+      </button>
       <button class="icon-btn logout" type="button" id="logout" hidden aria-label="Logga ut" title="Logga ut">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>
       </button>
