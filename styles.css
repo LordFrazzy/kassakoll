@@ -414,6 +414,7 @@ dialog::backdrop { background: rgba(10, 14, 12, 0.55); backdrop-filter: blur(3px
 .bank-empty { margin: 0; padding: 18px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 14px; }
 .bank-imgs { display: flex; gap: 8px; overflow-x: auto; margin: 8px 0; }
 .bank-imgs img { max-height: 320px; border-radius: 10px; border: 1px solid var(--line); }
+.copy-btn { color: var(--accent); margin: 4px 0 0 -10px; }
 .ocr-details pre { white-space: pre-wrap; font-size: 0.8rem; color: var(--muted); }
 @media (max-width: 640px) {
   .bank-row { grid-template-columns: auto minmax(0, 1.5fr) minmax(0, 1fr); }

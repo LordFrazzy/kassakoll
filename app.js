@@ -2166,6 +2166,27 @@
       renderBankRows();
       ev.target.value = '';
     });
+    // Kopiera den lästa texten (och vad som hittades), t.ex. för att visa varför köp saknas
+    $('bank-copy').addEventListener('click', async function () {
+      var btn = this;
+      var found = bank.rows.map(function (r) { return r.date + ' | ' + r.store + ' | ' + r.amount.toFixed(2) + (r.incoming ? ' (in)' : ''); });
+      var text = 'Kassakoll, lästa rader (' + bank.rows.length + ' köp):\n' + found.join('\n') +
+        '\n\nTexten som lästes:\n' + $('bank-ocr-text').textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (e) {
+        // Äldre mobiler: markera texten så att den kan kopieras för hand
+        var range = document.createRange();
+        range.selectNodeContents($('bank-ocr-text'));
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        btn.textContent = 'Markerad, välj Kopiera';
+        return;
+      }
+      btn.textContent = 'Kopierad!';
+      setTimeout(function () { btn.textContent = 'Kopiera texten'; }, 2000);
+    });
     $('bank-form').addEventListener('submit', saveBank);
     $('bank-close').addEventListener('click', closeBankDialog);
     $('bank-cancel').addEventListener('click', closeBankDialog);
